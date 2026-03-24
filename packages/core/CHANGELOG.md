@@ -1,5 +1,11 @@
 # @aqualens/core
 
+## 1.0.5
+
+### Patch Changes
+
+- [`b5ddec7`](https://github.com/famence/aqualens/commit/b5ddec766eb1b24508be2707ae9d16ef14e926c2) Thanks [@famence](https://github.com/famence)! - Update docs
+
 ## 1.0.4
 
 ### Patch Changes
