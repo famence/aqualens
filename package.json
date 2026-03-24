@@ -15,7 +15,7 @@
     "changeset": "changeset",
     "publish:version": "changeset version",
     "publish:publish": "changeset publish",
-    "publish": "npm run release:version && npm run build && npm run release:publish"
+    "publish": "npm run publish:version && npm run build && npm run publish:publish"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
