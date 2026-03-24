@@ -2,6 +2,10 @@
 
 Ultimate Liquid Glass effect for the web.
 
+**[Live demo](https://famence.github.io/aqualens/)**
+
+[![Aqualens demo screenshot](assets/demo.png)](https://famence.github.io/aqualens/)
+
 Monorepo with:
 - `@aqualens/core` — framework-agnostic WebGL2 engine
 - `@aqualens/react` — React bindings and components
@@ -53,8 +57,9 @@ npm run dev
 
 ## Demo app
 
-The repository includes a demo app in `demo/` (Next.js).  
-If you want to run it locally:
+The hosted demo is at **[famence.github.io/aqualens](https://famence.github.io/aqualens/)**.  
+The repository also includes the source in `demo/` (Next.js).  
+To run it locally:
 
 ```bash
 cd demo

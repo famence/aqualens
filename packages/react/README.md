@@ -2,6 +2,10 @@
 
 React 18+ bindings for **[@aqualens/core](../core/README.md)**: a declarative `<Aqualens>` wrapper, refs, and hooks on top of the shared WebGL renderer.
 
+**[Live demo](https://famence.github.io/aqualens/)**
+
+[![Aqualens demo screenshot](https://raw.githubusercontent.com/famence/aqualens/main/assets/demo.png)](https://famence.github.io/aqualens/)
+
 ## Requirements
 
 - **React** and **React DOM** `>= 18`
@@ -113,6 +117,7 @@ For advanced usage you can import from `@aqualens/react` or `@aqualens/core` int
 
 ## Example project
 
+The interactive demo runs at **[famence.github.io/aqualens](https://famence.github.io/aqualens/)**.  
 The monorepo **demo** app (`demo/` at the repository root) shows controls, `opaqueOverlap`, and `powerSave` toggles — use it as a full integration reference.
 
 ## Scripts (monorepo / package root)

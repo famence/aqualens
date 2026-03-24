@@ -2,6 +2,10 @@
 
 Framework-agnostic **liquid glass** effect for the web: WebGL2 refraction, glare, and backdrop capture. Used by [`@aqualens/react`](../react/README.md) and any vanilla or framework integration.
 
+**[Live demo](https://famence.github.io/aqualens/)**
+
+[![Aqualens demo screenshot](https://raw.githubusercontent.com/famence/aqualens/main/assets/demo.png)](https://famence.github.io/aqualens/)
+
 ## Requirements
 
 - **WebGL2** in the browser (current Chrome, Firefox, Safari, Edge).
