@@ -5,14 +5,13 @@ on:
     branches:
       - main
 
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   publish:
     name: Version & Publish
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -27,9 +26,6 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Install npm for trusted publishing
-        run: npm install -g "npm@>=11.5.1"
-
       - name: Install dependencies
         run: npm ci
 
@@ -43,23 +39,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Typecheck packages before publish
+        if: steps.version_pr.outputs.hasChangesets == 'false'
+        run: npm run typecheck
+
+      - name: Build packages before publish
+        if: steps.version_pr.outputs.hasChangesets == 'false'
+        run: npm run build
+
       - name: Publish packages and create GitHub Releases
         id: publish_packages
         if: steps.version_pr.outputs.hasChangesets == 'false'
         uses: changesets/action@v1
         with:
-          publish: npm run build && npm run publish:publish
+          publish: npm run publish:publish
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Skip publish until version PR is merged
-        if: steps.version_pr.outputs.hasChangesets == 'true'
-        run: echo "Changesets found. Version PR created/updated; publish runs after merge."
-
   demo-build:
     name: Build Demo
     runs-on: ubuntu-latest
+    concurrency:
+      group: demo-pages-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pages: write
@@ -90,6 +93,9 @@ jobs:
       - name: Build demo
         run: npm run build
         working-directory: demo
+        env:
+          # Ensures static export + basePath match https://<user>.github.io/<repo>/
+          AQUALENS_GITHUB_PAGES_BASE_PATH: /${{ github.event.repository.name }}
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -103,6 +109,9 @@ jobs:
     name: Deploy to GitHub Pages
     needs: demo-build
     runs-on: ubuntu-latest
+    concurrency:
+      group: demo-pages-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       pages: write
       id-token: write
