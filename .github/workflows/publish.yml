@@ -5,6 +5,12 @@ on:
     branches:
       - main
 
+# Opt JavaScript actions (e.g. configure-pages, deploy-pages, upload-artifact) into
+# Node.js 24 until upstream releases declare node24. See:
+# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   publish:
     name: Version & Publish
@@ -101,7 +107,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: demo/out
 
