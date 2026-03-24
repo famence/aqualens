@@ -1,0 +1,46 @@
+{
+  "name": "@aqualens/react",
+  "version": "1.0.2",
+  "description": "React bindings for @aqualens/core – A liquid glass effect components and hooks",
+  "main": "dist/aqualens-react.js",
+  "module": "dist/aqualens-react.mjs",
+  "types": "dist/aqualens-react.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/aqualens-react.d.ts",
+      "import": "./dist/aqualens-react.mjs",
+      "require": "./dist/aqualens-react.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aqualens/core": "^1.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/react": ">=18.0.0",
+    "@types/react-dom": ">=18.0.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "liquid-glass",
+    "effect",
+    "webgl",
+    "glass-effect",
+    "glassmorphism",
+    "ui",
+    "aqualens"
+  ]
+}

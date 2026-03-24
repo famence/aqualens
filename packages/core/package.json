@@ -1,0 +1,37 @@
+{
+  "name": "@aqualens/core",
+  "version": "1.0.2",
+  "description": "Framework-agnostic Liquid Glass engine powered by WebGL2",
+  "main": "dist/aqualens.js",
+  "module": "dist/aqualens.mjs",
+  "types": "dist/aqualens.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/aqualens.d.ts",
+      "import": "./dist/aqualens.mjs",
+      "require": "./dist/aqualens.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "html2canvas-pro": "^2.0.2"
+  },
+  "license": "MIT",
+  "keywords": [
+    "liquid-glass",
+    "effect",
+    "glass-effect",
+    "webgl",
+    "glassmorphism",
+    "ui",
+    "aqualens"
+  ]
+}
