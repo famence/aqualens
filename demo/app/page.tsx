@@ -25,6 +25,8 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   return { r, g, b };
 }
 
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
 export default function DemoPage() {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [powerSave, setPowerSave] = useState(false);
@@ -64,7 +66,7 @@ export default function DemoPage() {
           aria-hidden
         >
           <Image
-            src="/bg-tahoe-light.webp"
+            src={`${basePath}/bg-tahoe-light.webp`}
             alt=""
             fill
             sizes="100vw"
@@ -90,7 +92,7 @@ export default function DemoPage() {
           aria-hidden
         >
           <Image
-            src="/dark-abstraction.png"
+            src={`${basePath}/dark-abstraction.png`}
             alt=""
             fill
             sizes="100vw"
@@ -105,7 +107,7 @@ export default function DemoPage() {
           aria-label="Reveal demo"
         >
           <Image
-            src="/bg-tahoe-light.webp"
+            src={`${basePath}/bg-tahoe-light.webp`}
             alt=""
             fill
             sizes="100vw"
@@ -186,7 +188,7 @@ export default function DemoPage() {
 
         <section className="relative h-[calc(100svh-12*4px)] flex items-center justify-center snap-start snap-always">
           <Image
-            src="/macos-sequoia-minimal-pixel-art.png"
+            src={`${basePath}/macos-sequoia-minimal-pixel-art.png`}
             alt=""
             fill
             sizes="100vw"
