@@ -25,7 +25,6 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
           cache: npm
 
       - name: Install npm for trusted publishing
@@ -34,16 +33,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Create Release PR or Publish
-        id: changesets
+      - name: Create or update version PR
+        id: version_pr
         uses: changesets/action@v1
         with:
           version: npm run publish:version
-          publish: npm run build && npm run publish:publish
           title: "chore: version packages"
           commit: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish packages and create GitHub Releases
+        id: publish_packages
+        if: steps.version_pr.outputs.hasChangesets == 'false'
+        uses: changesets/action@v1
+        with:
+          publish: npm run build && npm run publish:publish
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip publish until version PR is merged
+        if: steps.version_pr.outputs.hasChangesets == 'true'
+        run: echo "Changesets found. Version PR created/updated; publish runs after merge."
 
   demo-build:
     name: Build Demo
