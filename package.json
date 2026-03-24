@@ -27,6 +27,7 @@
     "type": "git",
     "url": "https://github.com/famence/aqualens.git"
   },
+  "homepage": "https://famence.github.io/aqualens",
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0"

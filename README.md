@@ -7,6 +7,7 @@ Ultimate Liquid Glass effect for the web.
 [![Aqualens demo screenshot](assets/demo.png)](https://famence.github.io/aqualens/)
 
 Monorepo with:
+
 - `@aqualens/core` — framework-agnostic WebGL2 engine
 - `@aqualens/react` — React bindings and components
 
@@ -26,7 +27,7 @@ demo/      # Next.js showcase app
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 24+
 - npm 9+
 
 ## Installation
@@ -82,6 +83,7 @@ npm install @aqualens/react @aqualens/core
 ```
 
 For API details and usage examples, see:
+
 - `packages/core/README.md`
 - `packages/react/README.md`
 

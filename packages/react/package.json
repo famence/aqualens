@@ -39,6 +39,7 @@
     "type": "git",
     "url": "https://github.com/famence/aqualens.git"
   },
+  "homepage": "https://famence.github.io/aqualens",
   "license": "MIT",
   "keywords": [
     "react",
