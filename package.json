@@ -11,9 +11,15 @@
     "build:core": "npm run build --workspace=packages/core",
     "build:react": "npm run build --workspace=packages/react",
     "dev": "npm run dev --workspace=packages/core & npm run dev --workspace=packages/react",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "changeset": "changeset",
+    "publish:version": "changeset version",
+    "publish:publish": "changeset publish",
+    "publish": "npm run release:version && npm run build && npm run release:publish"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.30.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"
   },
