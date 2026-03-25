@@ -1,4 +1,4 @@
-import { parseBgColorToRgba, parseBoxShadow, type ShadowParams } from "./utils";
+import { parseBgColorToRgba, parseBoxShadow, effectiveZ, type ShadowParams } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import {
   DEFAULT_TINT,
@@ -32,6 +32,9 @@ export class AqualensLens implements AqualensLensInstance {
   } | null = null;
 
   private _sizeObs: ResizeObserver | null = null;
+
+  _cachedZ = 0;
+  private _zDirty = true;
 
   /** When true, next updateMetrics() will re-read getComputedStyle and recalc corner radii. */
   private _styleMetricsDirty = true;
@@ -269,6 +272,15 @@ export class AqualensLens implements AqualensLensInstance {
   /** Call when CSS (e.g. border-radius) may have changed so style metrics are recalc'd next frame. */
   invalidateStyleMetrics(): void {
     this._styleMetricsDirty = true;
+    this._zDirty = true;
+  }
+
+  getEffectiveZ(): number {
+    if (this._zDirty) {
+      this._cachedZ = effectiveZ(this.element);
+      this._zDirty = false;
+    }
+    return this._cachedZ;
   }
 
   _activate(): void {

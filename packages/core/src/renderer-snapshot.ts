@@ -269,6 +269,7 @@ function uploadTexture(
 
   renderer.textureWidth = srcCanvas.width;
   renderer.textureHeight = srcCanvas.height;
+  renderer._textureVersion++;
 
   ensureBlurFBOs(renderer);
   if (!renderer._fixedElementsDiscovered) {

@@ -6,7 +6,7 @@ import {
   MAIN_FRAGMENT,
   MASK_FRAGMENT,
 } from "./shaders";
-import { debounce, effectiveZ } from "./utils";
+import { debounce } from "./utils";
 import type { AqualensConfig, AqualensRendererInstance } from "./types";
 import { AqualensLens } from "./lens";
 import {
@@ -84,6 +84,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _blurDownsample = 1;
   _blurScaledRadius = 1;
 
+  _textureVersion = 0;
+  _blurredForTextureVersion = -1;
+  _blurredForRadius = -1;
+
   _composeFbo: WebGLFramebuffer | null = null;
   _composeTex: WebGLTexture | null = null;
   _composeFboW = 0;
@@ -130,11 +134,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
   readonly _onResizeHandler: () => void;
   readonly _onResizeHideHandler: () => void;
+  readonly _onScrollHandler: () => void;
   _resizeFallbackActive = false;
   _resizeFallbackCleanups: (() => void)[] = [];
   _resizeGeneration = 0;
   _resizePending = false;
-  _scrollCheckRafId: number | null = null;
   readonly _resizeObserver?: ResizeObserver;
   _destroyed = false;
 
@@ -152,7 +156,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const ctxAttribs: WebGLContextAttributes = {
       alpha: true,
       premultipliedAlpha: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     };
     const glContext = this.canvas.getContext("webgl2", ctxAttribs);
     if (!glContext) throw new Error("Aqualens: WebGL2 unavailable");
@@ -163,26 +167,21 @@ export class AqualensRenderer implements AqualensRendererInstance {
     this.snapshotTarget = snapshotTarget;
     this._snapshotResolution = Math.max(0.1, Math.min(3.0, snapshotResolution));
 
-    let lastScrollY = window.scrollY;
     let scrollTimeout: ReturnType<typeof setTimeout>;
-    const scrollCheck = () => {
+    this._onScrollHandler = () => {
       if (this._destroyed) return;
-      if (window.scrollY !== lastScrollY) {
-        this._isScrolling = true;
-        lastScrollY = window.scrollY;
-        clearTimeout(scrollTimeout);
-        scrollTimeout = setTimeout(() => {
-          this._isScrolling = false;
-          if (this._resizePending) {
-            this._resizePending = false;
-            doResizeCapture(this);
-          }
-        }, 200);
-        this.requestRender();
-      }
-      this._scrollCheckRafId = requestAnimationFrame(scrollCheck);
+      this._isScrolling = true;
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        this._isScrolling = false;
+        if (this._resizePending) {
+          this._resizePending = false;
+          doResizeCapture(this);
+        }
+      }, 200);
+      this.requestRender();
     };
-    this._scrollCheckRafId = requestAnimationFrame(scrollCheck);
+    window.addEventListener("scroll", this._onScrollHandler, { passive: true });
 
     this._onResizeHideHandler = () => {
       if (this._destroyed) return;
@@ -276,6 +275,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
           gl.UNSIGNED_BYTE,
           bmp,
         );
+        this._textureVersion++;
       };
     }
   }
@@ -394,9 +394,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this._scrollUpdateCounter++;
     }
 
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
     updateDynamicVideos(this);
     updateDynamicNodes(this);
 
@@ -422,7 +419,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     const zGroups = new Map<number, AqualensLens[]>();
     for (const lens of this.lenses) {
-      const zIndex = effectiveZ(lens.element);
+      const zIndex = lens.getEffectiveZ();
       let group = zGroups.get(zIndex);
       if (!group) {
         group = [];
@@ -444,7 +441,14 @@ export class AqualensRenderer implements AqualensRendererInstance {
     }
 
     if (!needCascade || opaqueCascade) {
-      if (this._currentBlurRadius > 0) runBlurPasses(this);
+      const blurStale =
+        this._blurredForTextureVersion !== this._textureVersion ||
+        this._blurredForRadius !== this._currentBlurRadius;
+      if (this._currentBlurRadius > 0 && blurStale) {
+        runBlurPasses(this);
+        this._blurredForTextureVersion = this._textureVersion;
+        this._blurredForRadius = this._currentBlurRadius;
+      }
     }
 
     gl.enable(gl.BLEND);
@@ -622,9 +626,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
   destroy(): void {
     this._destroyed = true;
     this.stopRenderLoop();
-    if (this._scrollCheckRafId) {
-      cancelAnimationFrame(this._scrollCheckRafId);
-    }
+    window.removeEventListener("scroll", this._onScrollHandler);
     if (this._dynamicRemovalRaf) {
       cancelAnimationFrame(this._dynamicRemovalRaf);
       this._dynamicRemovalRaf = null;

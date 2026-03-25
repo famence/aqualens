@@ -34,6 +34,7 @@ export function destroyBlurFBOs(renderer: AqualensRenderer): void {
   if (renderer._fboBTexture) gl.deleteTexture(renderer._fboBTexture);
   renderer._fboA = renderer._fboATexture = null;
   renderer._fboB = renderer._fboBTexture = null;
+  renderer._blurredForTextureVersion = -1;
   renderer._blurFboW = renderer._blurFboH = 0;
 }
 
