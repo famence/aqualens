@@ -6,6 +6,15 @@ export interface TintColor {
   a: number;
 }
 
+/**
+ * Rendering backend selection.
+ * - `"auto"` — SVG preferred; falls back to CSS on low-power devices, WebGL otherwise.
+ * - `"webgl"` — Force WebGL2 pipeline (requires `html2canvas-pro`).
+ * - `"svg"` — Force SVG displacement + CSS backdrop pipeline.
+ * - `"css"` — Force lightweight CSS-only pipeline.
+ */
+export type AqualensRenderMode = "auto" | "webgl" | "svg" | "css";
+
 /** Fallback when `background-color` cannot be parsed (no glass tint). */
 export const DEFAULT_TINT: TintColor = { r: 255, g: 255, b: 255, a: 0 };
 
@@ -56,6 +65,11 @@ export interface AqualensOptions {
   snapshot?: string;
   /** Render resolution multiplier (0.1–3.0). @default 2.0 */
   resolution?: number;
+  /**
+   * Rendering backend. @default "auto"
+   * @see AqualensRenderMode
+   */
+  mode?: AqualensRenderMode;
   /** Refraction (distortion) parameters. */
   refraction?: RefractionOptions;
   /** Glare (specular highlight) parameters. */

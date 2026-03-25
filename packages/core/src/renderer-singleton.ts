@@ -1,31 +1,51 @@
 import { AqualensRenderer } from "./renderer";
+import { SvgRenderer, getSharedSvgRenderer } from "./svg-renderer";
+import { PowerSaveRenderer, getSharedPowerSaveRenderer } from "./power-save-renderer";
+import { resolveRenderMode } from "./detect";
+import type { AqualensRenderMode } from "./types";
 
-let instance: AqualensRenderer | null = null;
-let initPromise: Promise<AqualensRenderer> | null = null;
+type AnyRenderer = AqualensRenderer | SvgRenderer | PowerSaveRenderer;
 
-/** Last config passed to updateSharedRendererConfig to avoid redundant recapture. */
+let instance: AnyRenderer | null = null;
+let initPromise: Promise<AnyRenderer> | null = null;
+let resolvedMode: "webgl" | "svg" | "css" | null = null;
+
 let lastSnapshotTarget: HTMLElement | null = null;
 let lastResolution: number | null = null;
 
 /**
- * Returns the shared Aqualens renderer. Creates it on first call (with optional
- * snapshot target and resolution). Subsequent calls return the same instance;
- * config is ignored after first creation. Use updateSharedRendererConfig() when
- * snapshotTarget or resolution props change.
+ * Returns the shared Aqualens renderer. On first call, resolves the render mode
+ * and creates the appropriate backend. Subsequent calls return the same instance.
  */
 export function getSharedRenderer(
   snapshotTarget?: HTMLElement | null,
   resolution?: number,
-): Promise<AqualensRenderer> {
+  mode?: AqualensRenderMode,
+): Promise<AnyRenderer> {
   if (instance) return Promise.resolve(instance);
   if (initPromise) return initPromise;
 
-  const target = snapshotTarget ?? document.body;
-  const resolutionValue = Math.max(0.1, Math.min(3.0, resolution ?? 2.0));
-  lastSnapshotTarget = target;
-  lastResolution = resolutionValue;
-
   initPromise = (async () => {
+    const resolved = await resolveRenderMode(mode ?? "auto");
+    resolvedMode = resolved;
+
+    if (resolved === "css") {
+      const renderer = getSharedPowerSaveRenderer();
+      instance = renderer;
+      return renderer;
+    }
+
+    if (resolved === "svg") {
+      const renderer = getSharedSvgRenderer();
+      instance = renderer;
+      return renderer;
+    }
+
+    const target = snapshotTarget ?? document.body;
+    const resolutionValue = Math.max(0.1, Math.min(3.0, resolution ?? 2.0));
+    lastSnapshotTarget = target;
+    lastResolution = resolutionValue;
+
     const renderer = new AqualensRenderer(target, resolutionValue);
     await renderer.captureSnapshot();
     renderer.startRenderLoop();
@@ -37,14 +57,16 @@ export function getSharedRenderer(
 }
 
 /**
- * Updates the shared renderer's snapshot target and/or resolution, then recaptures once.
- * No-op if the renderer is not created yet or if target and resolution are unchanged.
+ * Updates the shared WebGL renderer's snapshot target and/or resolution, then recaptures.
+ * No-op for SVG and CSS renderers (they don't use snapshots).
  */
 export function updateSharedRendererConfig(
   snapshotTarget?: HTMLElement | null,
   resolution?: number,
 ): Promise<void> {
-  if (!instance) return Promise.resolve();
+  if (!instance || !(instance instanceof AqualensRenderer))
+    return Promise.resolve();
+
   const target =
     snapshotTarget !== undefined ? (snapshotTarget ?? document.body) : null;
   const resolutionValue =
@@ -69,12 +91,17 @@ export function updateSharedRendererConfig(
 }
 
 /**
- * Sets overlap compositing for the shared renderer when lenses use different z-indices.
- * When true, higher z-groups erase lower layers under their shape and sample the original snapshot.
+ * Sets overlap compositing for the shared WebGL renderer.
+ * No-op for SVG and CSS renderers.
  */
 export function setOpaqueOverlap(value: boolean): void {
-  if (!instance) return;
+  if (!instance || !(instance instanceof AqualensRenderer)) return;
   if (instance.opaqueOverlap === value) return;
   instance.opaqueOverlap = value;
   instance.requestRender();
+}
+
+/** Returns the resolved mode after initialization, or null if not yet initialized. */
+export function getResolvedMode(): "webgl" | "svg" | "css" | null {
+  return resolvedMode;
 }
