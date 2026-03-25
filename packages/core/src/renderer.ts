@@ -1,7 +1,7 @@
 import {
   VERTEX_SHADER,
-  BLUR_H_FRAGMENT,
-  BLUR_V_FRAGMENT,
+  KAWASE_DOWN_FRAGMENT,
+  KAWASE_UP_FRAGMENT,
   COMPOSITE_FRAGMENT,
   MAIN_FRAGMENT,
   MASK_FRAGMENT,
@@ -10,21 +10,21 @@ import { debounce } from "./utils";
 import type { AqualensConfig, AqualensRendererInstance } from "./types";
 import { AqualensLens } from "./lens";
 import {
-  computeGaussianKernel,
   createProgramGL2,
   type DynMeta,
-  type BlurUniforms,
+  type KawaseUniforms,
+  type BlurPyramidLevel,
   type MainUniforms,
   type MaskUniforms,
 } from "./gl-utils";
 import {
-  ensureBlurFBOs,
-  destroyBlurFBOs,
-  updateBlurKernel,
+  ensureBlurPyramid,
+  destroyBlurPyramid,
+  updateBlurConfig,
   ensureComposeFbo,
   destroyComposeFbo,
   copyToCompose,
-  runBlurPasses,
+  runKawaseBlur,
   flattenGroupToCompose,
 } from "./renderer-fbo";
 import {
@@ -62,27 +62,20 @@ export class AqualensRenderer implements AqualensRendererInstance {
   scaleFactor = 1;
   useExternalTicker = false;
 
-  _hblurProgram!: WebGLProgram;
-  _vblurProgram!: WebGLProgram;
+  _kawaseDownProgram!: WebGLProgram;
+  _kawaseUpProgram!: WebGLProgram;
   _mainProgram!: WebGLProgram;
   _maskProgram!: WebGLProgram;
-  _hblurU!: BlurUniforms;
-  _vblurU!: BlurUniforms;
+  _kawaseDownU!: KawaseUniforms;
+  _kawaseUpU!: KawaseUniforms;
   _mainU!: MainUniforms;
   _maskU!: MaskUniforms;
   _vao!: WebGLVertexArrayObject;
 
-  _fboA: WebGLFramebuffer | null = null;
-  _fboATexture: WebGLTexture | null = null;
-  _fboB: WebGLFramebuffer | null = null;
-  _fboBTexture: WebGLTexture | null = null;
-  _blurFboW = 0;
-  _blurFboH = 0;
-
-  _blurWeights: Float32Array = computeGaussianKernel(1);
-  _currentBlurRadius = 1;
-  _blurDownsample = 1;
-  _blurScaledRadius = 1;
+  _blurPyramid: BlurPyramidLevel[] = [];
+  _blurResultTex: WebGLTexture | null = null;
+  _currentBlurRadius = 0;
+  _blurLevelCount = 0;
 
   _textureVersion = 0;
   _blurredForTextureVersion = -1;
@@ -146,6 +139,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _scratchShadowShapes = new Float32Array(MAX_SHAPES * 2 * 4);
   _scratchMaterialData = new Float32Array(MAX_SHAPES * 4 * 4);
 
+  _zGroupMap = new Map<number, AqualensLens[]>();
+  _sortedZKeys: number[] = [];
+  _visibleScratch: AqualensLens[] = [];
+
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
     this.canvas = document.createElement("canvas");
     this.canvas.style.cssText =
@@ -171,9 +168,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
     this._onScrollHandler = () => {
       if (this._destroyed) return;
       this._isScrolling = true;
+      for (const lens of this.lenses) lens._rectDirty = true;
       clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(() => {
         this._isScrolling = false;
+        for (const lens of this.lenses) lens._rectDirty = true;
         if (this._resizePending) {
           this._resizePending = false;
           doResizeCapture(this);
@@ -283,13 +282,13 @@ export class AqualensRenderer implements AqualensRendererInstance {
   private _initGL(): void {
     const gl = this.gl;
 
-    this._hblurProgram = createProgramGL2(gl, VERTEX_SHADER, BLUR_H_FRAGMENT);
-    this._vblurProgram = createProgramGL2(gl, VERTEX_SHADER, BLUR_V_FRAGMENT);
+    this._kawaseDownProgram = createProgramGL2(gl, VERTEX_SHADER, KAWASE_DOWN_FRAGMENT);
+    this._kawaseUpProgram = createProgramGL2(gl, VERTEX_SHADER, KAWASE_UP_FRAGMENT);
     this._mainProgram = createProgramGL2(gl, VERTEX_SHADER, MAIN_FRAGMENT);
     this._maskProgram = createProgramGL2(gl, VERTEX_SHADER, MASK_FRAGMENT);
 
-    this._hblurU = this._getBlurUniforms(this._hblurProgram);
-    this._vblurU = this._getBlurUniforms(this._vblurProgram);
+    this._kawaseDownU = this._getKawaseUniforms(this._kawaseDownProgram);
+    this._kawaseUpU = this._getKawaseUniforms(this._kawaseUpProgram);
     this._mainU = this._getMainUniforms(this._mainProgram);
     this._maskU = this._getMaskUniforms(this._maskProgram);
 
@@ -318,13 +317,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
     this._vao = vertexArrayObject;
   }
 
-  private _getBlurUniforms(program: WebGLProgram): BlurUniforms {
+  private _getKawaseUniforms(program: WebGLProgram): KawaseUniforms {
     const gl = this.gl;
     return {
-      inputTex: gl.getUniformLocation(program, "u_inputTex"),
-      texSize: gl.getUniformLocation(program, "u_texSize"),
-      blurRadius: gl.getUniformLocation(program, "u_blurRadius"),
-      blurWeights: gl.getUniformLocation(program, "u_blurWeights"),
+      tex: gl.getUniformLocation(program, "u_tex"),
+      halfPixel: gl.getUniformLocation(program, "u_halfPixel"),
     };
   }
 
@@ -397,8 +394,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
     updateDynamicVideos(this);
     updateDynamicNodes(this);
 
-    updateBlurKernel(this);
-    ensureBlurFBOs(this);
+    updateBlurConfig(this);
+    ensureBlurPyramid(this);
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const visualViewport = window.visualViewport;
@@ -417,7 +414,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
       lens.updateMetrics();
     }
 
-    const zGroups = new Map<number, AqualensLens[]>();
+    const zGroups = this._zGroupMap;
+    for (const [, group] of zGroups) group.length = 0;
     for (const lens of this.lenses) {
       const zIndex = lens.getEffectiveZ();
       let group = zGroups.get(zIndex);
@@ -428,9 +426,12 @@ export class AqualensRenderer implements AqualensRendererInstance {
       group.push(lens);
     }
 
-    const sortedZ = Array.from(zGroups.keys()).sort(
-      (aIndex, bIndex) => aIndex - bIndex,
-    );
+    const sortedZ = this._sortedZKeys;
+    sortedZ.length = 0;
+    for (const key of zGroups.keys()) {
+      if (zGroups.get(key)!.length > 0) sortedZ.push(key);
+    }
+    sortedZ.sort((a, b) => a - b);
 
     const needCascade = sortedZ.length > 1;
     const opaqueCascade = needCascade && this.opaqueOverlap;
@@ -440,15 +441,13 @@ export class AqualensRenderer implements AqualensRendererInstance {
       copyToCompose(this);
     }
 
-    if (!needCascade || opaqueCascade) {
-      const blurStale =
-        this._blurredForTextureVersion !== this._textureVersion ||
-        this._blurredForRadius !== this._currentBlurRadius;
-      if (this._currentBlurRadius > 0 && blurStale) {
-        runBlurPasses(this);
-        this._blurredForTextureVersion = this._textureVersion;
-        this._blurredForRadius = this._currentBlurRadius;
-      }
+    const blurStale =
+      this._blurredForTextureVersion !== this._textureVersion ||
+      this._blurredForRadius !== this._currentBlurRadius;
+    if (this._currentBlurRadius > 0 && blurStale) {
+      runKawaseBlur(this);
+      this._blurredForTextureVersion = this._textureVersion;
+      this._blurredForRadius = this._currentBlurRadius;
     }
 
     gl.enable(gl.BLEND);
@@ -460,25 +459,26 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
       if (needCascade && !opaqueCascade) {
         this._activeSourceTex = this._composeTex;
-        gl.disable(gl.BLEND);
-        if (this._currentBlurRadius > 0) runBlurPasses(this, this._composeTex!);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, this.canvas.width, this.canvas.height);
 
-      const visible = group.filter((lens) => {
+      const visible = this._visibleScratch;
+      visible.length = 0;
+      for (let li = 0; li < group.length; li++) {
+        const lens = group[li];
         const rect = lens.rectPx;
-        if (!rect || rect.width < 2 || rect.height < 2) return false;
-        return (
+        if (!rect || rect.width < 2 || rect.height < 2) continue;
+        if (
           rect.left + rect.width > 0 &&
           rect.left < viewportWidth &&
           rect.top + rect.height > 0 &&
           rect.top < viewportHeight
-        );
-      });
+        ) {
+          visible.push(lens);
+        }
+      }
 
       if (opaqueCascade && zIndex > 0 && visible.length > 0) {
         gl.enable(gl.BLEND);
@@ -642,7 +642,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
     if (this._dynWorker) {
       this._dynWorker.terminate();
     }
-    destroyBlurFBOs(this);
+    destroyBlurPyramid(this);
     destroyComposeFbo(this);
     this.canvas.remove();
     const styleElement = document.getElementById("liquid-gl-dynamic-styles");

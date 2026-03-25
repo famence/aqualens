@@ -50,18 +50,6 @@ export function createProgramGL2(
   return program;
 }
 
-export function computeGaussianKernel(radius: number): Float32Array {
-  const sigma = Math.max(radius / 3.0, 0.0001);
-  const kernel: number[] = [];
-  let sum = 0;
-  for (let index = 0; index <= radius; index++) {
-    const weight = Math.exp((-0.5 * (index * index)) / (sigma * sigma));
-    kernel.push(weight);
-    sum += index === 0 ? weight : weight * 2;
-  }
-  return new Float32Array(kernel.map((weight) => weight / sum));
-}
-
 export function createFBO(
   gl: WebGL2RenderingContext,
   width: number,
@@ -97,11 +85,16 @@ export function createFBO(
   return { fbo, tex };
 }
 
-export interface BlurUniforms {
-  inputTex: WebGLUniformLocation | null;
-  texSize: WebGLUniformLocation | null;
-  blurRadius: WebGLUniformLocation | null;
-  blurWeights: WebGLUniformLocation | null;
+export interface KawaseUniforms {
+  tex: WebGLUniformLocation | null;
+  halfPixel: WebGLUniformLocation | null;
+}
+
+export interface BlurPyramidLevel {
+  fbo: WebGLFramebuffer;
+  tex: WebGLTexture;
+  w: number;
+  h: number;
 }
 
 export interface MaskUniforms {

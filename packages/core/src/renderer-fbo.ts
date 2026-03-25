@@ -1,44 +1,52 @@
 import type { AqualensRenderer } from "./renderer";
 import type { AqualensLens } from "./lens";
-import { computeGaussianKernel, createFBO } from "./gl-utils";
+import { createFBO, type BlurPyramidLevel } from "./gl-utils";
 
-const BLUR_MAX_SHADER_RADIUS = 50;
+const MAX_BLUR_LEVELS = 7;
 
-export function ensureBlurFBOs(renderer: AqualensRenderer): void {
-  if (renderer._currentBlurRadius === 0) return;
+export function ensureBlurPyramid(renderer: AqualensRenderer): void {
+  if (renderer._blurLevelCount === 0) return;
   if (!renderer.texture || renderer.textureWidth === 0 || renderer.textureHeight === 0) return;
 
-  const downsample = renderer._blurDownsample;
-  const width = Math.max(1, Math.ceil(renderer.textureWidth / downsample));
-  const height = Math.max(1, Math.ceil(renderer.textureHeight / downsample));
+  const baseW = renderer.textureWidth;
+  const baseH = renderer.textureHeight;
+  const levels = renderer._blurLevelCount;
 
-  if (renderer._fboA && renderer._blurFboW === width && renderer._blurFboH === height) return;
+  if (
+    renderer._blurPyramid.length === levels &&
+    renderer._blurPyramid.length > 0 &&
+    renderer._blurPyramid[0].w === Math.max(1, baseW >> 1) &&
+    renderer._blurPyramid[0].h === Math.max(1, baseH >> 1)
+  ) {
+    return;
+  }
 
-  destroyBlurFBOs(renderer);
+  destroyBlurPyramid(renderer);
 
-  const fboA = createFBO(renderer.gl, width, height);
-  const fboB = createFBO(renderer.gl, width, height);
-  renderer._fboA = fboA.fbo;
-  renderer._fboATexture = fboA.tex;
-  renderer._fboB = fboB.fbo;
-  renderer._fboBTexture = fboB.tex;
-  renderer._blurFboW = width;
-  renderer._blurFboH = height;
+  let w = baseW;
+  let h = baseH;
+  for (let i = 0; i < levels; i++) {
+    w = Math.max(1, w >> 1);
+    h = Math.max(1, h >> 1);
+    const { fbo, tex } = createFBO(renderer.gl, w, h);
+    renderer._blurPyramid.push({ fbo, tex, w, h });
+  }
+
+  renderer._blurResultTex = renderer._blurPyramid[0].tex;
 }
 
-export function destroyBlurFBOs(renderer: AqualensRenderer): void {
+export function destroyBlurPyramid(renderer: AqualensRenderer): void {
   const gl = renderer.gl;
-  if (renderer._fboA) gl.deleteFramebuffer(renderer._fboA);
-  if (renderer._fboATexture) gl.deleteTexture(renderer._fboATexture);
-  if (renderer._fboB) gl.deleteFramebuffer(renderer._fboB);
-  if (renderer._fboBTexture) gl.deleteTexture(renderer._fboBTexture);
-  renderer._fboA = renderer._fboATexture = null;
-  renderer._fboB = renderer._fboBTexture = null;
+  for (const level of renderer._blurPyramid) {
+    gl.deleteFramebuffer(level.fbo);
+    gl.deleteTexture(level.tex);
+  }
+  renderer._blurPyramid = [];
+  renderer._blurResultTex = null;
   renderer._blurredForTextureVersion = -1;
-  renderer._blurFboW = renderer._blurFboH = 0;
 }
 
-export function updateBlurKernel(renderer: AqualensRenderer): void {
+export function updateBlurConfig(renderer: AqualensRenderer): void {
   let maxRadius = 0;
   for (const lens of renderer.lenses) {
     if (lens.options.blurRadius > maxRadius)
@@ -48,19 +56,69 @@ export function updateBlurKernel(renderer: AqualensRenderer): void {
   if (maxRadius !== renderer._currentBlurRadius) {
     renderer._currentBlurRadius = maxRadius;
     if (maxRadius === 0) {
-      destroyBlurFBOs(renderer);
-      renderer._blurDownsample = 1;
-      renderer._blurScaledRadius = 0;
+      destroyBlurPyramid(renderer);
+      renderer._blurLevelCount = 0;
     } else {
-      const MAX_R = BLUR_MAX_SHADER_RADIUS;
-      let downsample = 1;
-      if (maxRadius > MAX_R * 2) downsample = 4;
-      else if (maxRadius > MAX_R) downsample = 2;
-      renderer._blurDownsample = downsample;
-      renderer._blurScaledRadius = Math.min(MAX_R, Math.ceil(maxRadius / downsample));
-      renderer._blurWeights = computeGaussianKernel(renderer._blurScaledRadius);
+      renderer._blurLevelCount = Math.min(
+        MAX_BLUR_LEVELS,
+        Math.max(1, Math.ceil(Math.log2(Math.max(maxRadius, 1)))),
+      );
     }
   }
+}
+
+export function runKawaseBlur(
+  renderer: AqualensRenderer,
+  sourceTexture?: WebGLTexture,
+): void {
+  if (
+    !renderer.texture ||
+    renderer._blurPyramid.length === 0
+  ) return;
+
+  const gl = renderer.gl;
+  const pyramid = renderer._blurPyramid;
+  const source = sourceTexture || renderer.texture;
+
+  gl.bindVertexArray(renderer._vao);
+
+  gl.useProgram(renderer._kawaseDownProgram);
+
+  let inputTex = source;
+  let inputW = renderer.textureWidth;
+  let inputH = renderer.textureHeight;
+
+  for (let i = 0; i < pyramid.length; i++) {
+    const level = pyramid[i];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, level.fbo);
+    gl.viewport(0, 0, level.w, level.h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, inputTex);
+    gl.uniform1i(renderer._kawaseDownU.tex, 0);
+    gl.uniform2f(renderer._kawaseDownU.halfPixel, 0.5 / inputW, 0.5 / inputH);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    inputTex = level.tex;
+    inputW = level.w;
+    inputH = level.h;
+  }
+
+  gl.useProgram(renderer._kawaseUpProgram);
+
+  for (let i = pyramid.length - 1; i > 0; i--) {
+    const srcLevel = pyramid[i];
+    const dstLevel = pyramid[i - 1];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dstLevel.fbo);
+    gl.viewport(0, 0, dstLevel.w, dstLevel.h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, srcLevel.tex);
+    gl.uniform1i(renderer._kawaseUpU.tex, 0);
+    gl.uniform2f(renderer._kawaseUpU.halfPixel, 0.5 / srcLevel.w, 0.5 / srcLevel.h);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindVertexArray(null);
 }
 
 export function ensureComposeFbo(renderer: AqualensRenderer): void {
@@ -269,50 +327,6 @@ export function flattenGroupToCompose(
     canvasHeight / renderer._canvasCopyTexH,
   );
 
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.bindVertexArray(null);
-}
-
-export function runBlurPasses(
-  renderer: AqualensRenderer,
-  sourceTexture?: WebGLTexture,
-): void {
-  if (
-    !renderer.texture ||
-    !renderer._fboA ||
-    !renderer._fboB ||
-    !renderer._fboATexture ||
-    !renderer._fboBTexture
-  )
-    return;
-
-  const gl = renderer.gl;
-  const blurWidth = renderer._blurFboW;
-  const blurHeight = renderer._blurFboH;
-
-  gl.bindVertexArray(renderer._vao);
-
-  gl.bindFramebuffer(gl.FRAMEBUFFER, renderer._fboA);
-  gl.viewport(0, 0, blurWidth, blurHeight);
-  gl.useProgram(renderer._hblurProgram);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, sourceTexture || renderer.texture);
-  gl.uniform1i(renderer._hblurU.inputTex, 0);
-  gl.uniform2f(renderer._hblurU.texSize, blurWidth, blurHeight);
-  gl.uniform1i(renderer._hblurU.blurRadius, renderer._blurScaledRadius);
-  gl.uniform1fv(renderer._hblurU.blurWeights, renderer._blurWeights);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-  gl.bindFramebuffer(gl.FRAMEBUFFER, renderer._fboB);
-  gl.useProgram(renderer._vblurProgram);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, renderer._fboATexture);
-  gl.uniform1i(renderer._vblurU.inputTex, 0);
-  gl.uniform2f(renderer._vblurU.texSize, blurWidth, blurHeight);
-  gl.uniform1i(renderer._vblurU.blurRadius, renderer._blurScaledRadius);
-  gl.uniform1fv(renderer._vblurU.blurWeights, renderer._blurWeights);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);

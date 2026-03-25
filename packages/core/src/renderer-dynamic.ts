@@ -15,10 +15,10 @@ export function isIgnored(element: HTMLElement): boolean {
 
 function getMaxLensZ(renderer: AqualensRenderer): number {
   let maxZ = 0;
-  renderer.lenses.forEach((lens) => {
-    const zIndex = effectiveZ(lens.element);
-    if (zIndex > maxZ) maxZ = zIndex;
-  });
+  for (const lens of renderer.lenses) {
+    const z = lens.getEffectiveZ();
+    if (z > maxZ) maxZ = z;
+  }
   return maxZ;
 }
 

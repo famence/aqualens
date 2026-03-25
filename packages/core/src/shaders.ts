@@ -6,44 +6,38 @@ void main() {
   gl_Position = vec4(a_position, 0.0, 1.0);
 }`;
 
-export const BLUR_H_FRAGMENT = `#version 300 es
+export const KAWASE_DOWN_FRAGMENT = `#version 300 es
 precision highp float;
-#define MAX_BLUR_RADIUS 50
 in vec2 v_uv;
-uniform sampler2D u_inputTex;
-uniform vec2 u_texSize;
-uniform int u_blurRadius;
-uniform float u_blurWeights[MAX_BLUR_RADIUS + 1];
+uniform sampler2D u_tex;
+uniform vec2 u_halfPixel;
 out vec4 fragColor;
 void main() {
-  vec2 texel = 1.0 / u_texSize;
-  vec4 c = texture(u_inputTex, v_uv) * u_blurWeights[0];
-  for (int i = 1; i <= u_blurRadius; ++i) {
-    float w = u_blurWeights[i];
-    c += texture(u_inputTex, v_uv + vec2(float(i) * texel.x, 0.0)) * w;
-    c += texture(u_inputTex, v_uv - vec2(float(i) * texel.x, 0.0)) * w;
-  }
-  fragColor = c;
+  vec4 sum = texture(u_tex, v_uv) * 4.0;
+  sum += texture(u_tex, v_uv - u_halfPixel);
+  sum += texture(u_tex, v_uv + u_halfPixel);
+  sum += texture(u_tex, v_uv + vec2(u_halfPixel.x, -u_halfPixel.y));
+  sum += texture(u_tex, v_uv - vec2(u_halfPixel.x, -u_halfPixel.y));
+  fragColor = sum / 8.0;
 }`;
 
-export const BLUR_V_FRAGMENT = `#version 300 es
+export const KAWASE_UP_FRAGMENT = `#version 300 es
 precision highp float;
-#define MAX_BLUR_RADIUS 50
 in vec2 v_uv;
-uniform sampler2D u_inputTex;
-uniform vec2 u_texSize;
-uniform int u_blurRadius;
-uniform float u_blurWeights[MAX_BLUR_RADIUS + 1];
+uniform sampler2D u_tex;
+uniform vec2 u_halfPixel;
 out vec4 fragColor;
 void main() {
-  vec2 texel = 1.0 / u_texSize;
-  vec4 c = texture(u_inputTex, v_uv) * u_blurWeights[0];
-  for (int i = 1; i <= u_blurRadius; ++i) {
-    float w = u_blurWeights[i];
-    c += texture(u_inputTex, v_uv + vec2(0.0, float(i) * texel.y)) * w;
-    c += texture(u_inputTex, v_uv - vec2(0.0, float(i) * texel.y)) * w;
-  }
-  fragColor = c;
+  vec4 sum =
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x * 2.0, 0.0)) +
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x, u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(0.0, u_halfPixel.y * 2.0)) +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x, u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x * 2.0, 0.0)) +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x, -u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(0.0, -u_halfPixel.y * 2.0)) +
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x, -u_halfPixel.y)) * 2.0;
+  fragColor = sum / 12.0;
 }`;
 
 export const COMPOSITE_FRAGMENT = `#version 300 es
@@ -269,62 +263,6 @@ vec2 getNormal(vec2 fc) {
   return g * 1414.213562;
 }
 
-// ---- LCH color space (for tinting) ----
-
-const vec3 D65_WHITE = vec3(0.95045592705, 1.0, 1.08905775076);
-const mat3 RGB_TO_XYZ_M = mat3(
-  0.4124, 0.3576, 0.1805,
-  0.2126, 0.7152, 0.0722,
-  0.0193, 0.1192, 0.9505
-);
-const mat3 XYZ_TO_RGB_M = mat3(
-  3.2406255, -1.537208,  -0.4986286,
-  -0.9689307, 1.8757561,  0.0415175,
-  0.0557101, -0.2040211,  1.0569959
-);
-
-float uncompandSRGB(float a) {
-  return a > 0.04045 ? pow((a + 0.055) / 1.055, 2.4) : a / 12.92;
-}
-float compandRGB(float a) {
-  return a <= 0.0031308 ? 12.92 * a : 1.055 * pow(a, 0.41666666666) - 0.055;
-}
-vec3 srgbToRgb(vec3 s) {
-  return vec3(uncompandSRGB(s.x), uncompandSRGB(s.y), uncompandSRGB(s.z));
-}
-vec3 rgbToSrgb(vec3 r) {
-  return vec3(compandRGB(r.x), compandRGB(r.y), compandRGB(r.z));
-}
-vec3 rgbToXyz(vec3 c) { return c * RGB_TO_XYZ_M; }
-vec3 xyzToRgb(vec3 c) { return c * XYZ_TO_RGB_M; }
-vec3 srgbToXyz(vec3 s) { return rgbToXyz(srgbToRgb(s)); }
-vec3 xyzToSrgb(vec3 x) { return rgbToSrgb(xyzToRgb(x)); }
-
-float xyzToLabF(float x) {
-  return x > 0.00885645167 ? pow(x, 0.333333333) : 7.78703703704 * x + 0.13793103448;
-}
-vec3 xyzToLab(vec3 xyz) {
-  vec3 s = xyz / D65_WHITE;
-  s = vec3(xyzToLabF(s.x), xyzToLabF(s.y), xyzToLabF(s.z));
-  return vec3(116.0 * s.y - 16.0, 500.0 * (s.x - s.y), 200.0 * (s.y - s.z));
-}
-vec3 labToLch(vec3 lab) {
-  return vec3(lab.x, sqrt(dot(lab.yz, lab.yz)), atan(lab.z, lab.y) * 57.2957795131);
-}
-vec3 srgbToLch(vec3 s) { return labToLch(xyzToLab(srgbToXyz(s))); }
-
-float labToXyzF(float x) {
-  return x > 0.206897 ? x * x * x : 0.12841854934 * (x - 0.137931034);
-}
-vec3 labToXyz(vec3 lab) {
-  float w = (lab.x + 16.0) / 116.0;
-  return D65_WHITE * vec3(labToXyzF(w + lab.y / 500.0), labToXyzF(w), labToXyzF(w - lab.z / 200.0));
-}
-vec3 lchToLab(vec3 lch) {
-  return vec3(lch.x, lch.y * cos(lch.z * 0.01745329251), lch.y * sin(lch.z * 0.01745329251));
-}
-vec3 lchToSrgb(vec3 lch) { return xyzToSrgb(labToXyz(lchToLab(lch))); }
-
 // ---- Helpers ----
 
 float vec2ToAngle(vec2 v) {
@@ -523,10 +461,11 @@ void main() {
             5.0
           ), 0.0, 1.0
         );
-        vec3 ftLCH = srgbToLch(mix(vec3(1.0), mat.tint.rgb, mat.tint.a * 0.5));
-        ftLCH.x += 20.0 * ff * mat.refFresnelFactor;
-        ftLCH.x = clamp(ftLCH.x, 0.0, 100.0);
-        outColor = mix(outColor, vec4(lchToSrgb(ftLCH), 1.0), ff * mat.refFresnelFactor * 0.7 * length(n));
+        vec3 ftBase = mix(vec3(1.0), mat.tint.rgb, mat.tint.a * 0.5);
+        vec3 ftLinear = pow(ftBase, vec3(2.2));
+        ftLinear += vec3(0.2 * ff * mat.refFresnelFactor);
+        vec3 ftResult = pow(clamp(ftLinear, 0.0, 1.0), vec3(0.4545));
+        outColor = mix(outColor, vec4(ftResult, 1.0), ff * mat.refFresnelFactor * 0.7 * length(n));
       }
 
       if (mat.glareFactor > 0.001) {
@@ -544,11 +483,13 @@ void main() {
                     * mat.glareFactor;
         gaf = clamp(pow(gaf, 0.1 + mat.glareConvergence * 2.0), 0.0, 1.0);
 
-        vec3 gtLCH = srgbToLch(mix(outColor.rgb, mat.tint.rgb, mat.tint.a * 0.5));
-        gtLCH.x += 150.0 * gaf * gGeo;
-        gtLCH.y += 30.0 * gaf * gGeo;
-        gtLCH.x = clamp(gtLCH.x, 0.0, 120.0);
-        outColor = mix(outColor, vec4(lchToSrgb(gtLCH), 1.0), gaf * gGeo * length(n));
+        vec3 gtBase = mix(outColor.rgb, mat.tint.rgb, mat.tint.a * 0.5);
+        vec3 gtLinear = pow(gtBase, vec3(2.2));
+        float glareAdd = gaf * gGeo;
+        gtLinear += vec3(1.5 * glareAdd);
+        gtLinear += vec3(0.3 * glareAdd) * normalize(max(gtLinear, vec3(0.001)));
+        vec3 gtResult = pow(clamp(gtLinear, 0.0, 1.5), vec3(0.4545));
+        outColor = mix(outColor, vec4(min(gtResult, 1.0), 1.0), glareAdd * length(n));
       }
     }
   } else {
