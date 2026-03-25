@@ -20,11 +20,14 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "NODE_ENV=production tsup",
+    "dev": "NODE_ENV=development tsup --watch",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "html2canvas-pro": "^2.0.2"
+  },
+  "devDependencies": {
     "html2canvas-pro": "^2.0.2"
   },
   "repository": {

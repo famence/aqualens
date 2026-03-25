@@ -9,12 +9,12 @@ Framework-agnostic **liquid glass** effect for the web: WebGL2 refraction, glare
 ## Requirements
 
 - **WebGL2** in the browser (current Chrome, Firefox, Safari, Edge).
-- **DOM**: runs in the browser; snapshot capture uses [`html2canvas-pro`](https://www.npmjs.com/package/html2canvas-pro) (already a dependency).
+- **DOM**: runs in the browser; snapshot capture uses [`html2canvas-pro`](https://www.npmjs.com/package/html2canvas-pro), which you must install as a **peer dependency** (same major range as listed in `@aqualens/core`’s `peerDependencies`).
 
 ## Install
 
 ```bash
-npm install @aqualens/core
+npm install @aqualens/core html2canvas-pro
 ```
 
 ## Quick start (shared renderer)
@@ -116,7 +116,8 @@ For a CSS/SVG-style fallback with reduced GPU work, the package exposes `PowerSa
 ## Scripts (monorepo / package root)
 
 ```bash
-npm run build   # tsup → dist/
+npm run build   # NODE_ENV=production tsup → minified dist/ (no source maps)
+npm run dev     # watch build without minification (faster iteration)
 npm run typecheck
 ```
 

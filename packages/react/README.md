@@ -10,14 +10,15 @@ React 18+ bindings for **[@aqualens/core](../core/README.md)**: a declarative `<
 
 - **React** and **React DOM** `>= 18`
 - Same browser requirements as core: **WebGL2**
+- **[`html2canvas-pro`](https://www.npmjs.com/package/html2canvas-pro)** — peer dependency (required for backdrop capture; install it in your app)
 
 ## Install
 
 ```bash
-npm install @aqualens/react
+npm install @aqualens/react html2canvas-pro
 ```
 
-`@aqualens/core` is a direct dependency of this package; installing `@aqualens/react` normally pulls it in automatically.
+`@aqualens/core` is installed as a dependency of this package. You still need **`html2canvas-pro`** in your project because it is a peer dependency of `@aqualens/core` (and of `@aqualens/react`).
 
 ## Quick start
 

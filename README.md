@@ -70,16 +70,16 @@ npm run dev
 
 ## Package install examples
 
-Install core:
+Install core (includes peer `html2canvas-pro` for snapshot capture):
 
 ```bash
-npm install @aqualens/core
+npm install @aqualens/core html2canvas-pro
 ```
 
-Install React bindings:
+Install React bindings (peer `html2canvas-pro` is still required):
 
 ```bash
-npm install @aqualens/react @aqualens/core
+npm install @aqualens/react html2canvas-pro
 ```
 
 For API details and usage examples, see:
