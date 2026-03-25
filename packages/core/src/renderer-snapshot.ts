@@ -1,6 +1,6 @@
 import html2canvas from "html2canvas-pro";
 import type { AqualensRenderer } from "./renderer";
-import { ensureBlurFBOs } from "./renderer-fbo";
+import { ensureBlurPyramid } from "./renderer-fbo";
 import { discoverAndAddFixedElements } from "./renderer-dynamic";
 
 export function resizeCanvas(renderer: AqualensRenderer): void {
@@ -269,8 +269,9 @@ function uploadTexture(
 
   renderer.textureWidth = srcCanvas.width;
   renderer.textureHeight = srcCanvas.height;
+  renderer._textureVersion++;
 
-  ensureBlurFBOs(renderer);
+  ensureBlurPyramid(renderer);
   if (!renderer._fixedElementsDiscovered) {
     if (typeof requestIdleCallback !== "undefined") {
       requestIdleCallback(() => discoverAndAddFixedElements(renderer), {

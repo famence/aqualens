@@ -15,10 +15,10 @@ export function isIgnored(element: HTMLElement): boolean {
 
 function getMaxLensZ(renderer: AqualensRenderer): number {
   let maxZ = 0;
-  renderer.lenses.forEach((lens) => {
-    const zIndex = effectiveZ(lens.element);
-    if (zIndex > maxZ) maxZ = zIndex;
-  });
+  for (const lens of renderer.lenses) {
+    const z = lens.getEffectiveZ();
+    if (z > maxZ) maxZ = z;
+  }
   return maxZ;
 }
 
@@ -248,11 +248,25 @@ export function updateDynamicVideos(renderer: AqualensRenderer): void {
   const snapRect = renderer.snapshotTarget.getBoundingClientRect();
   const maxLensZ = getMaxLensZ(renderer);
 
+  const lensRects = renderer.lenses
+    .filter((lens) => lens.element.isConnected)
+    .map((lens) => lens.rectPx)
+    .filter(Boolean) as { left: number; top: number; width: number; height: number }[];
+
   renderer._videoNodes.forEach((videoElement) => {
     if (effectiveZ(videoElement) >= maxLensZ) return;
     if (isIgnored(videoElement) || videoElement.readyState < 2) return;
 
     const rect = videoElement.getBoundingClientRect();
+
+    const intersectsAnyLens = lensRects.some(
+      (lr) =>
+        rect.left < lr.left + lr.width &&
+        rect.left + rect.width > lr.left &&
+        rect.top < lr.top + lr.height &&
+        rect.top + rect.height > lr.top,
+    );
+    if (!intersectsAnyLens) return;
     const texCoordX = (rect.left - snapRect.left) * renderer.scaleFactor;
     const texCoordY = (rect.top - snapRect.top) * renderer.scaleFactor;
     const texWidth = rect.width * renderer.scaleFactor;
@@ -388,6 +402,7 @@ export function updateDynamicVideos(renderer: AqualensRenderer): void {
       gl.UNSIGNED_BYTE,
       renderer._tmpCanvas,
     );
+    renderer._textureVersion++;
   });
 }
 
@@ -548,6 +563,7 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
             gl.UNSIGNED_BYTE,
             eraseCanvas,
           );
+          renderer._textureVersion++;
         }
       }
 
@@ -646,6 +662,7 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
         gl.UNSIGNED_BYTE,
         compositeCanvas,
       );
+      renderer._textureVersion++;
 
       if (renderer._workerEnabled && meta._heavyAnim) {
         const jobId = `${Date.now()}_${Math.random()}`;

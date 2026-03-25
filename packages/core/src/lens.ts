@@ -1,4 +1,4 @@
-import { parseBgColorToRgba, parseBoxShadow, type ShadowParams } from "./utils";
+import { parseBgColorToRgba, parseBoxShadow, effectiveZ, type ShadowParams } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import {
   DEFAULT_TINT,
@@ -32,6 +32,10 @@ export class AqualensLens implements AqualensLensInstance {
   } | null = null;
 
   private _sizeObs: ResizeObserver | null = null;
+
+  _cachedZ = 0;
+  private _zDirty = true;
+  _rectDirty = true;
 
   /** When true, next updateMetrics() will re-read getComputedStyle and recalc corner radii. */
   private _styleMetricsDirty = true;
@@ -192,35 +196,38 @@ export class AqualensLens implements AqualensLensInstance {
     }
   }
 
-  /** HOT: called every render for every lens; rect always updated, style/radii only when dirty. */
+  /** HOT: called every render for every lens; rect only read when dirty, style/radii when dirty. */
   updateMetrics(): void {
-    const rect = this.element.getBoundingClientRect();
+    if (this._rectDirty) {
+      const rect = this.element.getBoundingClientRect();
+      this.rectPx = {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+      this._rectDirty = false;
 
-    this.rectPx = {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-    };
+      if (rect.width <= 0 || rect.height <= 0) {
+        this.radiusCss = 0;
+        this.radiusGl = 0;
+        this.radiusCssCorners = { tl: 0, tr: 0, br: 0, bl: 0 };
+        this.radiusGlCorners = { tl: 0, tr: 0, br: 0, bl: 0 };
+        this._lastRectW = 0;
+        this._lastRectH = 0;
+        return;
+      }
 
-    if (rect.width <= 0 || rect.height <= 0) {
-      this.radiusCss = 0;
-      this.radiusGl = 0;
-      this.radiusCssCorners = { tl: 0, tr: 0, br: 0, bl: 0 };
-      this.radiusGlCorners = { tl: 0, tr: 0, br: 0, bl: 0 };
-      this._lastRectW = 0;
-      this._lastRectH = 0;
-      return;
+      const sizeChanged =
+        rect.width !== this._lastRectW || rect.height !== this._lastRectH;
+      if (sizeChanged) {
+        this._lastRectW = rect.width;
+        this._lastRectH = rect.height;
+        this._styleMetricsDirty = true;
+      }
     }
 
-    const sizeChanged =
-      rect.width !== this._lastRectW || rect.height !== this._lastRectH;
-    if (sizeChanged) {
-      this._lastRectW = rect.width;
-      this._lastRectH = rect.height;
-      this._styleMetricsDirty = true;
-    }
-
+    if (!this.rectPx || this.rectPx.width <= 0 || this.rectPx.height <= 0) return;
     if (!this._styleMetricsDirty) return;
 
     this._styleMetricsDirty = false;
@@ -229,11 +236,12 @@ export class AqualensLens implements AqualensLensInstance {
     const emBase =
       parseFloat(style.fontSize) || parseFloat(rootStyle.fontSize) || 16;
 
+    const rp = this.rectPx as unknown as DOMRect;
     let rawCorners: CornerRadii = {
-      tl: parseCornerRadius(style.borderTopLeftRadius, rect, emBase),
-      tr: parseCornerRadius(style.borderTopRightRadius, rect, emBase),
-      br: parseCornerRadius(style.borderBottomRightRadius, rect, emBase),
-      bl: parseCornerRadius(style.borderBottomLeftRadius, rect, emBase),
+      tl: parseCornerRadius(style.borderTopLeftRadius, rp, emBase),
+      tr: parseCornerRadius(style.borderTopRightRadius, rp, emBase),
+      br: parseCornerRadius(style.borderBottomRightRadius, rp, emBase),
+      bl: parseCornerRadius(style.borderBottomLeftRadius, rp, emBase),
     };
     const cornersSum =
       rawCorners.tl + rawCorners.tr + rawCorners.br + rawCorners.bl;
@@ -245,14 +253,14 @@ export class AqualensLens implements AqualensLensInstance {
     ) {
       const fallback = parseCornerRadius(
         style.borderRadius.trim(),
-        rect,
+        rp,
         emBase,
       );
       if (Number.isFinite(fallback) && fallback > 0) {
         rawCorners = { tl: fallback, tr: fallback, br: fallback, bl: fallback };
       }
     }
-    const corners = normalizeCornerRadii(rawCorners, rect.width, rect.height);
+    const corners = normalizeCornerRadii(rawCorners, rp.width, rp.height);
     this.radiusCssCorners = corners;
     this.radiusCss = Math.max(corners.tl, corners.tr, corners.br, corners.bl);
 
@@ -269,6 +277,16 @@ export class AqualensLens implements AqualensLensInstance {
   /** Call when CSS (e.g. border-radius) may have changed so style metrics are recalc'd next frame. */
   invalidateStyleMetrics(): void {
     this._styleMetricsDirty = true;
+    this._rectDirty = true;
+    this._zDirty = true;
+  }
+
+  getEffectiveZ(): number {
+    if (this._zDirty) {
+      this._cachedZ = effectiveZ(this.element);
+      this._zDirty = false;
+    }
+    return this._cachedZ;
   }
 
   _activate(): void {

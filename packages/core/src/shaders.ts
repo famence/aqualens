@@ -6,44 +6,38 @@ void main() {
   gl_Position = vec4(a_position, 0.0, 1.0);
 }`;
 
-export const BLUR_H_FRAGMENT = `#version 300 es
+export const KAWASE_DOWN_FRAGMENT = `#version 300 es
 precision highp float;
-#define MAX_BLUR_RADIUS 50
 in vec2 v_uv;
-uniform sampler2D u_inputTex;
-uniform vec2 u_texSize;
-uniform int u_blurRadius;
-uniform float u_blurWeights[MAX_BLUR_RADIUS + 1];
+uniform sampler2D u_tex;
+uniform vec2 u_halfPixel;
 out vec4 fragColor;
 void main() {
-  vec2 texel = 1.0 / u_texSize;
-  vec4 c = texture(u_inputTex, v_uv) * u_blurWeights[0];
-  for (int i = 1; i <= u_blurRadius; ++i) {
-    float w = u_blurWeights[i];
-    c += texture(u_inputTex, v_uv + vec2(float(i) * texel.x, 0.0)) * w;
-    c += texture(u_inputTex, v_uv - vec2(float(i) * texel.x, 0.0)) * w;
-  }
-  fragColor = c;
+  vec4 sum = texture(u_tex, v_uv) * 4.0;
+  sum += texture(u_tex, v_uv - u_halfPixel);
+  sum += texture(u_tex, v_uv + u_halfPixel);
+  sum += texture(u_tex, v_uv + vec2(u_halfPixel.x, -u_halfPixel.y));
+  sum += texture(u_tex, v_uv - vec2(u_halfPixel.x, -u_halfPixel.y));
+  fragColor = sum / 8.0;
 }`;
 
-export const BLUR_V_FRAGMENT = `#version 300 es
+export const KAWASE_UP_FRAGMENT = `#version 300 es
 precision highp float;
-#define MAX_BLUR_RADIUS 50
 in vec2 v_uv;
-uniform sampler2D u_inputTex;
-uniform vec2 u_texSize;
-uniform int u_blurRadius;
-uniform float u_blurWeights[MAX_BLUR_RADIUS + 1];
+uniform sampler2D u_tex;
+uniform vec2 u_halfPixel;
 out vec4 fragColor;
 void main() {
-  vec2 texel = 1.0 / u_texSize;
-  vec4 c = texture(u_inputTex, v_uv) * u_blurWeights[0];
-  for (int i = 1; i <= u_blurRadius; ++i) {
-    float w = u_blurWeights[i];
-    c += texture(u_inputTex, v_uv + vec2(0.0, float(i) * texel.y)) * w;
-    c += texture(u_inputTex, v_uv - vec2(0.0, float(i) * texel.y)) * w;
-  }
-  fragColor = c;
+  vec4 sum =
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x * 2.0, 0.0)) +
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x, u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(0.0, u_halfPixel.y * 2.0)) +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x, u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x * 2.0, 0.0)) +
+    texture(u_tex, v_uv + vec2(u_halfPixel.x, -u_halfPixel.y)) * 2.0 +
+    texture(u_tex, v_uv + vec2(0.0, -u_halfPixel.y * 2.0)) +
+    texture(u_tex, v_uv + vec2(-u_halfPixel.x, -u_halfPixel.y)) * 2.0;
+  fragColor = sum / 12.0;
 }`;
 
 export const COMPOSITE_FRAGMENT = `#version 300 es
@@ -230,6 +224,37 @@ float mainSDF(vec2 fc) {
 }
 
 vec2 getNormal(vec2 fc) {
+  if (u_shapeCount <= 1) {
+    vec2 p, hs;
+    vec4 corners;
+    if (u_shapeCount == 1) {
+      vec4 posSize = u_shapes[0];
+      corners = u_shapes[1];
+      p = (fc - posSize.xy) / u_resolution.y;
+      hs = posSize.zw / u_resolution.y;
+    } else {
+      p = fc / u_resolution.y - u_resolution.xy * 0.5 / u_resolution.y;
+      hs = u_resolution.xy * 0.5 / u_resolution.y;
+      corners = u_radiusCorners;
+      if (dot(corners, vec4(1.0)) <= 0.0) corners = vec4(u_radius);
+    }
+    float maxR = min(hs.x, hs.y);
+    vec4 r4 = clamp(corners / u_resolution.y, 0.0, maxR);
+    vec4 rr = vec4(r4.y, r4.z, r4.x, r4.w);
+    rr.xy = (p.x > 0.0) ? rr.xy : rr.zw;
+    float radius = (p.y > 0.0) ? rr.x : rr.y;
+    vec2 q = abs(p) - hs + radius;
+    vec2 qc = max(q, 0.0);
+    float lenQ = length(qc);
+    vec2 grad;
+    if (lenQ > 0.0001) {
+      grad = qc / lenQ;
+    } else {
+      grad = (q.x > q.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    }
+    grad *= sign(p);
+    return grad * (1414.213562 / u_resolution.y);
+  }
   vec2 h = vec2(max(abs(dFdx(fc.x)), 0.0001), max(abs(dFdy(fc.y)), 0.0001));
   vec2 g = vec2(
     mainSDF(fc + vec2(h.x, 0.0)) - mainSDF(fc - vec2(h.x, 0.0)),
@@ -237,62 +262,6 @@ vec2 getNormal(vec2 fc) {
   ) / (2.0 * h);
   return g * 1414.213562;
 }
-
-// ---- LCH color space (for tinting) ----
-
-const vec3 D65_WHITE = vec3(0.95045592705, 1.0, 1.08905775076);
-const mat3 RGB_TO_XYZ_M = mat3(
-  0.4124, 0.3576, 0.1805,
-  0.2126, 0.7152, 0.0722,
-  0.0193, 0.1192, 0.9505
-);
-const mat3 XYZ_TO_RGB_M = mat3(
-  3.2406255, -1.537208,  -0.4986286,
-  -0.9689307, 1.8757561,  0.0415175,
-  0.0557101, -0.2040211,  1.0569959
-);
-
-float uncompandSRGB(float a) {
-  return a > 0.04045 ? pow((a + 0.055) / 1.055, 2.4) : a / 12.92;
-}
-float compandRGB(float a) {
-  return a <= 0.0031308 ? 12.92 * a : 1.055 * pow(a, 0.41666666666) - 0.055;
-}
-vec3 srgbToRgb(vec3 s) {
-  return vec3(uncompandSRGB(s.x), uncompandSRGB(s.y), uncompandSRGB(s.z));
-}
-vec3 rgbToSrgb(vec3 r) {
-  return vec3(compandRGB(r.x), compandRGB(r.y), compandRGB(r.z));
-}
-vec3 rgbToXyz(vec3 c) { return c * RGB_TO_XYZ_M; }
-vec3 xyzToRgb(vec3 c) { return c * XYZ_TO_RGB_M; }
-vec3 srgbToXyz(vec3 s) { return rgbToXyz(srgbToRgb(s)); }
-vec3 xyzToSrgb(vec3 x) { return rgbToSrgb(xyzToRgb(x)); }
-
-float xyzToLabF(float x) {
-  return x > 0.00885645167 ? pow(x, 0.333333333) : 7.78703703704 * x + 0.13793103448;
-}
-vec3 xyzToLab(vec3 xyz) {
-  vec3 s = xyz / D65_WHITE;
-  s = vec3(xyzToLabF(s.x), xyzToLabF(s.y), xyzToLabF(s.z));
-  return vec3(116.0 * s.y - 16.0, 500.0 * (s.x - s.y), 200.0 * (s.y - s.z));
-}
-vec3 labToLch(vec3 lab) {
-  return vec3(lab.x, sqrt(dot(lab.yz, lab.yz)), atan(lab.z, lab.y) * 57.2957795131);
-}
-vec3 srgbToLch(vec3 s) { return labToLch(xyzToLab(srgbToXyz(s))); }
-
-float labToXyzF(float x) {
-  return x > 0.206897 ? x * x * x : 0.12841854934 * (x - 0.137931034);
-}
-vec3 labToXyz(vec3 lab) {
-  float w = (lab.x + 16.0) / 116.0;
-  return D65_WHITE * vec3(labToXyzF(w + lab.y / 500.0), labToXyzF(w), labToXyzF(w - lab.z / 200.0));
-}
-vec3 lchToLab(vec3 lch) {
-  return vec3(lch.x, lch.y * cos(lch.z * 0.01745329251), lch.y * sin(lch.z * 0.01745329251));
-}
-vec3 lchToSrgb(vec3 lch) { return xyzToSrgb(labToXyz(lchToLab(lch))); }
 
 // ---- Helpers ----
 
@@ -327,10 +296,18 @@ vec2 clampUVToBounds(vec2 uv) {
 }
 
 vec4 sampleDispersion(vec2 uv, vec2 offs, float blurMix, float disp) {
+  if (disp <= 0.001) {
+    vec2 uvC = clampUVToBounds(uv + offs);
+    if (blurMix <= 0.001) return vec4(texture(u_tex, uvC).rgb, 1.0);
+    return vec4(mix(texture(u_tex, uvC).rgb, texture(u_blurredTex, uvC).rgb, blurMix), 1.0);
+  }
   vec2 uvR = clampUVToBounds(uv + offs * (1.0 - (N_R - 1.0) * disp));
   vec2 uvG = clampUVToBounds(uv + offs);
   vec2 uvB = clampUVToBounds(uv + offs * (1.0 - (N_B - 1.0) * disp));
 
+  if (blurMix <= 0.001) {
+    return vec4(texture(u_tex, uvR).r, texture(u_tex, uvG).g, texture(u_tex, uvB).b, 1.0);
+  }
   float bgR  = texture(u_tex,        uvR).r;
   float bgG  = texture(u_tex,        uvG).g;
   float bgB  = texture(u_tex,        uvB).b;
@@ -417,7 +394,8 @@ Material globalMat() {
   return m;
 }
 
-Material getBlendedMaterial(vec2 fc) {
+Material getBlendedMaterial(vec2 fc, out float outSdf) {
+  outSdf = mainSDF(fc);
   if (u_shapeCount <= 1) return globalMat();
   Material mat = loadMaterial(0);
   float d = sdfShape(fc, 0);
@@ -438,12 +416,12 @@ Material getBlendedMaterial(vec2 fc) {
 void main() {
   vec2 res1x = u_resolution / u_dpr;
   vec2 localCoord = v_uv * u_resolution;
-  float sdf = mainSDF(localCoord);
   float px = u_dpr / u_resolution.y;
 
   vec2 baseUV = clampUVToBounds(getTexUV(v_uv));
 
-  Material mat = getBlendedMaterial(localCoord);
+  float sdf;
+  Material mat = getBlendedMaterial(localCoord, sdf);
 
   vec4 outColor;
 
@@ -476,36 +454,43 @@ void main() {
 
       outColor = mix(outColor, vec4(mat.tint.rgb, 1.0), tintMix);
 
-      float ff = clamp(
-        pow(
-          1.0 + sdf * res1x.y / 1500.0 * pow(500.0 / mat.refFresnelRange, 2.0) + mat.refFresnelHardness,
-          5.0
-        ), 0.0, 1.0
-      );
-      vec3 ftLCH = srgbToLch(mix(vec3(1.0), mat.tint.rgb, mat.tint.a * 0.5));
-      ftLCH.x += 20.0 * ff * mat.refFresnelFactor;
-      ftLCH.x = clamp(ftLCH.x, 0.0, 100.0);
-      outColor = mix(outColor, vec4(lchToSrgb(ftLCH), 1.0), ff * mat.refFresnelFactor * 0.7 * length(n));
+      if (mat.refFresnelFactor > 0.001) {
+        float ff = clamp(
+          pow(
+            1.0 + sdf * res1x.y / 1500.0 * pow(500.0 / mat.refFresnelRange, 2.0) + mat.refFresnelHardness,
+            5.0
+          ), 0.0, 1.0
+        );
+        vec3 ftBase = mix(vec3(1.0), mat.tint.rgb, mat.tint.a * 0.5);
+        vec3 ftLinear = pow(ftBase, vec3(2.2));
+        ftLinear += vec3(0.2 * ff * mat.refFresnelFactor);
+        vec3 ftResult = pow(clamp(ftLinear, 0.0, 1.0), vec3(0.4545));
+        outColor = mix(outColor, vec4(ftResult, 1.0), ff * mat.refFresnelFactor * 0.7 * length(n));
+      }
 
-      float gGeo = clamp(
-        pow(
-          1.0 + sdf * res1x.y / 1500.0 * pow(500.0 / mat.glareRange, 2.0) + mat.glareHardness,
-          5.0
-        ), 0.0, 1.0
-      );
-      float ga = (vec2ToAngle(normalize(n)) - PI / 4.0 + u_glareAngle) * 2.0;
-      int farside = 0;
-      if ((ga > PI * 1.5 && ga < PI * 3.5) || ga < PI * -0.5) farside = 1;
-      float gaf = (0.5 + sin(ga) * 0.5)
-                  * (farside == 1 ? 1.2 * u_glareOppositeFactor : 1.2)
-                  * mat.glareFactor;
-      gaf = clamp(pow(gaf, 0.1 + mat.glareConvergence * 2.0), 0.0, 1.0);
+      if (mat.glareFactor > 0.001) {
+        float gGeo = clamp(
+          pow(
+            1.0 + sdf * res1x.y / 1500.0 * pow(500.0 / mat.glareRange, 2.0) + mat.glareHardness,
+            5.0
+          ), 0.0, 1.0
+        );
+        float ga = (vec2ToAngle(normalize(n)) - PI / 4.0 + u_glareAngle) * 2.0;
+        int farside = 0;
+        if ((ga > PI * 1.5 && ga < PI * 3.5) || ga < PI * -0.5) farside = 1;
+        float gaf = (0.5 + sin(ga) * 0.5)
+                    * (farside == 1 ? 1.2 * u_glareOppositeFactor : 1.2)
+                    * mat.glareFactor;
+        gaf = clamp(pow(gaf, 0.1 + mat.glareConvergence * 2.0), 0.0, 1.0);
 
-      vec3 gtLCH = srgbToLch(mix(outColor.rgb, mat.tint.rgb, mat.tint.a * 0.5));
-      gtLCH.x += 150.0 * gaf * gGeo;
-      gtLCH.y += 30.0 * gaf * gGeo;
-      gtLCH.x = clamp(gtLCH.x, 0.0, 120.0);
-      outColor = mix(outColor, vec4(lchToSrgb(gtLCH), 1.0), gaf * gGeo * length(n));
+        vec3 gtBase = mix(outColor.rgb, mat.tint.rgb, mat.tint.a * 0.5);
+        vec3 gtLinear = pow(gtBase, vec3(2.2));
+        float glareAdd = gaf * gGeo;
+        gtLinear += vec3(1.5 * glareAdd);
+        gtLinear += vec3(0.3 * glareAdd) * normalize(max(gtLinear, vec3(0.001)));
+        vec3 gtResult = pow(clamp(gtLinear, 0.0, 1.5), vec3(0.4545));
+        outColor = mix(outColor, vec4(min(gtResult, 1.0), 1.0), glareAdd * length(n));
+      }
     }
   } else {
     outColor = vec4(0.0);

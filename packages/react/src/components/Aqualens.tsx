@@ -2,6 +2,7 @@ import React, {
   useEffect,
   useRef,
   useState,
+  useMemo,
   forwardRef,
   useImperativeHandle,
   type CSSProperties,
@@ -63,6 +64,31 @@ export interface AqualensRef {
   element: HTMLDivElement | null;
 }
 
+function shallowEqual<T extends object>(
+  a: T | undefined,
+  b: T | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a) as (keyof T)[];
+  const keysB = Object.keys(b) as (keyof T)[];
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function useShallowMemo<T extends object>(
+  value: T | undefined,
+): T | undefined {
+  const ref = useRef(value);
+  if (!shallowEqual(ref.current, value)) {
+    ref.current = value;
+  }
+  return ref.current;
+}
+
 function buildConfig(options: {
   resolution?: number;
   refraction?: RefractionOptions;
@@ -102,6 +128,9 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
     },
     ref,
   ) {
+    const stableRefraction = useShallowMemo(refraction);
+    const stableGlare = useShallowMemo(glare);
+
     const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
     const rendererRef = useRef<AqualensRenderer | null>(null);
     const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
@@ -115,7 +144,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       get element() {
         return elementRef.current;
       },
-    }));
+    }), []);
 
     useEffect(() => (
       () => {
@@ -162,8 +191,8 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
 
       const config = buildConfig({
         resolution,
-        refraction,
-        glare,
+        refraction: stableRefraction,
+        glare: stableGlare,
         blurRadius,
         blurEdge,
         onInit,
@@ -199,8 +228,8 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       const preservedTint = lens.options.tint;
       const next = buildConfig({
         resolution,
-        refraction,
-        glare,
+        refraction: stableRefraction,
+        glare: stableGlare,
         blurRadius,
         blurEdge,
         onInit: lens.options.on?.init,
@@ -215,13 +244,18 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       }
     }, [
       resolution,
-      refraction,
-      glare,
+      stableRefraction,
+      stableGlare,
       blurRadius,
       blurEdge,
       renderer,
       powerSave,
     ]);
+
+    const mergedStyle = useMemo<CSSProperties>(
+      () => ({ position: "relative" as const, ...style }),
+      [style],
+    );
 
     const Component = Tag as React.ElementType;
 
@@ -229,10 +263,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       <Component
         ref={elementRef}
         className={className}
-        style={{
-          position: "relative",
-          ...style,
-        }}
+        style={mergedStyle}
         {...rest}
       >
         {children}

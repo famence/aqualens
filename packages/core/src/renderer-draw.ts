@@ -26,8 +26,8 @@ function setMainViewportAndBounds(
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(
     gl.TEXTURE_2D,
-    renderer._currentBlurRadius > 0
-      ? renderer._fboBTexture
+    renderer._currentBlurRadius > 0 && renderer._blurResultTex
+      ? renderer._blurResultTex
       : renderer._activeSourceTex || renderer.texture,
   );
   gl.uniform1i(renderer._mainU.blurredTex, 1);
