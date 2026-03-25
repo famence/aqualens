@@ -1,5 +1,11 @@
 # @aqualens/core
 
+## 1.1.0
+
+### Minor Changes
+
+- [#5](https://github.com/famence/aqualens/pull/5) [`9eba35a`](https://github.com/famence/aqualens/commit/9eba35a975b394d0c8944af7cd65188242be509f) Thanks [@famence](https://github.com/famence)! - Significant performance optimizations
+
 ## 1.0.5
 
 ### Patch Changes
