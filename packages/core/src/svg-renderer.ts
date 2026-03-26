@@ -67,6 +67,22 @@ export class SvgRenderer {
   }
 }
 
+/**
+ * SVG-based lens matching the glass-refraction library architecture:
+ *
+ * On the element itself:
+ *   - backdrop-filter: blur() saturate() brightness()  — frosted glass
+ *   - filter: url(#svg-refract)                        — refraction displacement
+ *
+ * The SVG filter chain (matching glass-refraction GlassFilters exactly):
+ *   1. feGaussianBlur(SourceGraphic, 0.3)  → "preblur"
+ *   2. feTurbulence(fractalNoise)          → "noise"
+ *   3. feGaussianBlur(noise, 3)            → "smooth"
+ *   4. feDisplacementMap(preblur, smooth)   → "displaced"
+ *   5. feColorMatrix(saturate 1.3)
+ *
+ * Overlay divs for tint, glare, chromatic, specular sit inside the element.
+ */
 export class SvgLens implements AqualensLensInstance {
   element: HTMLElement;
   options: AqualensConfig;
@@ -79,15 +95,16 @@ export class SvgLens implements AqualensLensInstance {
   private _renderer: SvgRenderer;
   private _filterId: string;
   private _filterElement: SVGFilterElement | null = null;
-  private _refractionLayer: HTMLDivElement | null = null;
   private _tintElement: HTMLDivElement | null = null;
   private _glareElement: HTMLDivElement | null = null;
   private _chromaticElement: HTMLDivElement | null = null;
   private _specularElement: HTMLDivElement | null = null;
   private _bgColorComponents: TintColor | null = null;
+  private _origBackdropFilter: string;
+  private _origWebkitBackdropFilter: string;
+  private _origFilter: string;
   private _origIsolation: string;
   private _origOverflow: string;
-  private _origPosition: string;
   private _destroyed = false;
 
   constructor(element: HTMLElement, options: AqualensConfig, renderer: SvgRenderer) {
@@ -106,22 +123,19 @@ export class SvgLens implements AqualensLensInstance {
       this.options = { ...options, tint: DEFAULT_TINT };
     }
 
+    this._origBackdropFilter = element.style.backdropFilter || "";
+    this._origWebkitBackdropFilter =
+      (element.style as any).webkitBackdropFilter || "";
+    this._origFilter = element.style.filter || "";
     this._origIsolation = element.style.isolation || "";
     this._origOverflow = element.style.overflow || "";
-    this._origPosition = element.style.position || "";
 
     element.style.setProperty("background-color", "transparent", "important");
     element.style.setProperty("background-image", "none", "important");
     element.style.setProperty("background", "transparent", "important");
 
-    const computed = window.getComputedStyle(element);
-    if (computed.position === "static") {
-      element.style.position = "relative";
-    }
-    element.style.isolation = "isolate";
-    if (options.blurEdge) element.style.overflow = "hidden";
-
     this._buildSvgFilter();
+    this._applyElementStyles();
     this._buildOverlays();
     this._fireInit();
   }
@@ -138,7 +152,7 @@ export class SvgLens implements AqualensLensInstance {
 
   _syncStyles(): void {
     if (this._destroyed) return;
-    this._applyRefractionStyles();
+    this._applyElementStyles();
     this._applyTint();
     this._applyGlare();
     this._applyFresnel();
@@ -150,16 +164,18 @@ export class SvgLens implements AqualensLensInstance {
     if (this._destroyed) return;
     this._destroyed = true;
 
-    this._refractionLayer?.remove();
     this._tintElement?.remove();
     this._glareElement?.remove();
     this._chromaticElement?.remove();
     this._specularElement?.remove();
     this._filterElement?.remove();
 
+    this.element.style.backdropFilter = this._origBackdropFilter;
+    (this.element.style as any).webkitBackdropFilter =
+      this._origWebkitBackdropFilter;
+    this.element.style.filter = this._origFilter;
     this.element.style.isolation = this._origIsolation;
     this.element.style.overflow = this._origOverflow;
-    this.element.style.position = this._origPosition;
 
     this.element.style.removeProperty("background-image");
     this.element.style.removeProperty("background");
@@ -174,10 +190,8 @@ export class SvgLens implements AqualensLensInstance {
   }
 
   /**
-   * Build SVG filter using feTurbulence + feDisplacementMap.
-   * Maps refraction params to turbulence parameters:
-   *   thickness → frequency (thicker = lower freq = wider distortion)
-   *   factor → displacement scale
+   * Build SVG filter matching glass-refraction's GlassFilters exactly:
+   *   preblur → fractalNoise → smooth → displace → saturate
    */
   private _buildSvgFilter(): void {
     const defs = this._renderer.svgDefs;
@@ -188,9 +202,10 @@ export class SvgLens implements AqualensLensInstance {
     const thickness = this.options.refraction.thickness;
     const factor = this.options.refraction.factor;
 
-    const baseFreqX = Math.max(0.002, 0.04 / Math.max(1, thickness / 10));
-    const baseFreqY = baseFreqX * 0.85;
-    const scale = Math.max(1, thickness * factor * 0.4);
+    const baseFreqX = Math.max(0.003, 0.015 / Math.max(0.5, factor));
+    const baseFreqY = baseFreqX * 0.8;
+    const noiseSmooth = Math.max(2, Math.min(6, thickness * 0.15));
+    const scale = Math.max(2, thickness * factor * 0.4);
 
     const filter = document.createElementNS(SVG_NS, "filter");
     filter.setAttribute("id", this._filterId);
@@ -200,28 +215,52 @@ export class SvgLens implements AqualensLensInstance {
     filter.setAttribute("height", "110%");
     filter.setAttribute("color-interpolation-filters", "sRGB");
 
+    const fePreblur = document.createElementNS(SVG_NS, "feGaussianBlur");
+    fePreblur.setAttribute("in", "SourceGraphic");
+    fePreblur.setAttribute("stdDeviation", "0.3");
+    fePreblur.setAttribute("result", "preblur");
+    filter.appendChild(fePreblur);
+
     const feTurb = document.createElementNS(SVG_NS, "feTurbulence");
-    feTurb.setAttribute("type", "turbulence");
+    feTurb.setAttribute("type", "fractalNoise");
     feTurb.setAttribute("baseFrequency", `${baseFreqX.toFixed(4)} ${baseFreqY.toFixed(4)}`);
     feTurb.setAttribute("numOctaves", "2");
     feTurb.setAttribute("seed", "42");
-    feTurb.setAttribute("result", "turbulence");
+    feTurb.setAttribute("result", "noise");
     filter.appendChild(feTurb);
 
+    const feSmooth = document.createElementNS(SVG_NS, "feGaussianBlur");
+    feSmooth.setAttribute("in", "noise");
+    feSmooth.setAttribute("stdDeviation", String(noiseSmooth));
+    feSmooth.setAttribute("result", "smooth");
+    filter.appendChild(feSmooth);
+
     const feDisp = document.createElementNS(SVG_NS, "feDisplacementMap");
-    feDisp.setAttribute("in", "SourceGraphic");
-    feDisp.setAttribute("in2", "turbulence");
+    feDisp.setAttribute("in", "preblur");
+    feDisp.setAttribute("in2", "smooth");
     feDisp.setAttribute("scale", String(Math.round(scale)));
     feDisp.setAttribute("xChannelSelector", "R");
     feDisp.setAttribute("yChannelSelector", "G");
+    feDisp.setAttribute("result", "displaced");
     filter.appendChild(feDisp);
+
+    const feSat = document.createElementNS(SVG_NS, "feColorMatrix");
+    feSat.setAttribute("in", "displaced");
+    feSat.setAttribute("type", "saturate");
+    feSat.setAttribute("values", "1.3");
+    filter.appendChild(feSat);
 
     defs.appendChild(filter);
     this._filterElement = filter;
   }
 
-  private _applyRefractionStyles(): void {
-    if (!this._refractionLayer) return;
+  /**
+   * Apply styles directly on the element, matching glass-refraction's .glass class:
+   *   backdrop-filter: blur() saturate() brightness()
+   *   filter: url(#refract)
+   *   isolation: isolate
+   */
+  private _applyElementStyles(): void {
     const options = this.options;
 
     const parts: string[] = [];
@@ -229,35 +268,29 @@ export class SvgLens implements AqualensLensInstance {
       const cssBlurPx = options.blurRadius * SVG_CSS_BLUR_SCALE;
       parts.push(`blur(${cssBlurPx}px)`);
     }
-    parts.push("saturate(1.4)", "brightness(1.06)");
+    parts.push("saturate(1.7)", "brightness(1.08)");
 
     const backdropFilter = parts.join(" ");
-    this._refractionLayer.style.backdropFilter = backdropFilter;
-    (this._refractionLayer.style as any).webkitBackdropFilter = backdropFilter;
-    this._refractionLayer.style.filter = `url(#${this._filterId})`;
+    this.element.style.backdropFilter = backdropFilter;
+    (this.element.style as any).webkitBackdropFilter = backdropFilter;
+    this.element.style.filter = `url(#${this._filterId})`;
+    this.element.style.isolation = "isolate";
+    if (options.blurEdge) this.element.style.overflow = "hidden";
   }
 
   private _buildOverlays(): void {
-    const refLayer = document.createElement("div");
-    refLayer.setAttribute("data-lsvg-refraction", "");
-    refLayer.style.cssText =
-      "position:absolute;inset:0;z-index:-2;pointer-events:none;border-radius:inherit;";
-    this._applyRefractionStylesInit(refLayer);
-    this.element.insertBefore(refLayer, this.element.firstChild);
-    this._refractionLayer = refLayer;
-
     const tint = document.createElement("div");
     tint.setAttribute("data-lsvg-tint", "");
     tint.style.cssText =
       "position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;";
     this._applyTintTo(tint);
-    this.element.insertBefore(tint, refLayer.nextSibling);
+    this.element.appendChild(tint);
     this._tintElement = tint;
 
     const chromatic = document.createElement("div");
     chromatic.setAttribute("data-lsvg-chromatic", "");
     chromatic.style.cssText =
-      "position:absolute;inset:0;z-index:2147483645;pointer-events:none;border-radius:inherit;";
+      "position:absolute;inset:0;pointer-events:none;border-radius:inherit;opacity:0.8;";
     this._applyChromaticTo(chromatic);
     this.element.appendChild(chromatic);
     this._chromaticElement = chromatic;
@@ -265,7 +298,7 @@ export class SvgLens implements AqualensLensInstance {
     const specular = document.createElement("div");
     specular.setAttribute("data-lsvg-specular", "");
     specular.style.cssText =
-      "position:absolute;inset:0;z-index:2147483646;pointer-events:none;border-radius:inherit;overflow:hidden;";
+      "position:absolute;inset:0;pointer-events:none;border-radius:inherit;overflow:hidden;";
     this._applySpecularTo(specular);
     this.element.appendChild(specular);
     this._specularElement = specular;
@@ -273,24 +306,11 @@ export class SvgLens implements AqualensLensInstance {
     const glare = document.createElement("div");
     glare.setAttribute("data-lsvg-glare", "");
     glare.style.cssText =
-      "position:absolute;inset:0;z-index:2147483647;pointer-events:none;border-radius:inherit;overflow:hidden;";
+      "position:absolute;inset:0;pointer-events:none;border-radius:inherit;overflow:hidden;";
     this._applyGlareTo(glare);
     this._applyFresnelTo(glare);
     this.element.appendChild(glare);
     this._glareElement = glare;
-  }
-
-  private _applyRefractionStylesInit(el: HTMLDivElement): void {
-    const options = this.options;
-    const parts: string[] = [];
-    if (options.blurRadius > 0) {
-      const cssBlurPx = options.blurRadius * SVG_CSS_BLUR_SCALE;
-      parts.push(`blur(${cssBlurPx}px)`);
-    }
-    parts.push("saturate(1.4)", "brightness(1.06)");
-    el.style.backdropFilter = parts.join(" ");
-    (el.style as any).webkitBackdropFilter = parts.join(" ");
-    el.style.filter = `url(#${this._filterId})`;
   }
 
   private _applyTint(): void {
