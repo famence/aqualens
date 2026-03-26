@@ -27,6 +27,11 @@
   "peerDependencies": {
     "html2canvas-pro": "^2.0.2"
   },
+  "peerDependenciesMeta": {
+    "html2canvas-pro": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "html2canvas-pro": "^2.0.2"
   },

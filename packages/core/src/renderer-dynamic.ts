@@ -1,4 +1,4 @@
-import html2canvas from "html2canvas-pro";
+import { getHtml2Canvas } from "./html2canvas-loader";
 import { effectiveZ, parseTransform } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import type { DynMeta } from "./gl-utils";
@@ -505,31 +505,43 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
 
       const objectFitPatch = prepareObjectFitPatch(element);
 
-      html2canvas(element, {
-        backgroundColor: null,
-        scale: renderer.scaleFactor,
-        useCORS: true,
-        removeContainer: true,
-        logging: false,
-        ignoreElements: (ignoredElement: Element) =>
-          ignoredElement.tagName === "CANVAS" ||
-          (ignoredElement as HTMLElement).hasAttribute("data-liquid-ignore"),
-        onclone: objectFitPatch.onclone,
-      })
-        .then((capturedCanvas) => {
-          if (capturedCanvas.width > 0 && capturedCanvas.height > 0) {
-            meta.lastCapture = capturedCanvas;
-            meta.needsRecapture = false;
+      getHtml2Canvas()
+        .then((html2canvas) => {
+          if (!html2canvas) {
+            meta._capturing = false;
+            renderer._dynRecaptureInFlight = Math.max(
+              0,
+              renderer._dynRecaptureInFlight - 1,
+            );
+            objectFitPatch.cleanup();
+            return;
           }
-        })
-        .catch(() => {})
-        .finally(() => {
-          meta._capturing = false;
-          renderer._dynRecaptureInFlight = Math.max(
-            0,
-            renderer._dynRecaptureInFlight - 1,
-          );
-          objectFitPatch.cleanup();
+          return html2canvas(element, {
+            backgroundColor: null,
+            scale: renderer.scaleFactor,
+            useCORS: true,
+            removeContainer: true,
+            logging: false,
+            ignoreElements: (ignoredElement: Element) =>
+              ignoredElement.tagName === "CANVAS" ||
+              (ignoredElement as HTMLElement).hasAttribute("data-liquid-ignore"),
+            onclone: objectFitPatch.onclone,
+          })
+            .then((capturedCanvas) => {
+              if (capturedCanvas.width > 0 && capturedCanvas.height > 0) {
+                meta.lastCapture = capturedCanvas;
+                meta.needsRecapture = false;
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              meta._capturing = false;
+              renderer._dynRecaptureInFlight = Math.max(
+                0,
+                renderer._dynRecaptureInFlight - 1,
+              );
+              objectFitPatch.cleanup();
+            });
         });
     }
 

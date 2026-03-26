@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
-import { Aqualens } from "@aqualens/react";
+import { Aqualens, type AqualensRenderMode } from "@aqualens/react";
 import {
   GlassControls,
   DEFAULT_GLASS_SETTINGS,
@@ -29,7 +29,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
 export default function DemoPage() {
   const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [powerSave, setPowerSave] = useState(false);
+  const [renderMode, setRenderMode] = useState<AqualensRenderMode>("auto");
   const [mergeLens, setMergeLens] = useState(false);
   const [opaqueOverlap, setOpaqueOverlap] = useState(false);
   const [glassSettings, setGlassSettings] = useState<GlassSettings>(
@@ -49,12 +49,12 @@ export default function DemoPage() {
   useEffect(() => {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
-    if (powerSave) {
+    if (renderMode === "css") {
       root.setAttribute("data-liquid-power-save", "true");
     } else {
       root.removeAttribute("data-liquid-power-save");
     }
-  }, [powerSave]);
+  }, [renderMode]);
 
   const tintRgb = hexToRgb(glassSettings.tintHex) ?? { r: 255, g: 255, b: 255 };
 
@@ -168,7 +168,7 @@ export default function DemoPage() {
             }}
             blurRadius={10}
             blurEdge
-            powerSave={powerSave}
+            mode={renderMode}
           >
             <div className="p-8 h-full flex flex-col items-start justify-between text-white">
               <p className="text-xs tracking-[0.35em] uppercase text-white/70">
@@ -205,7 +205,7 @@ export default function DemoPage() {
       <Aqualens
         className="glass-scroll-shape shadow-lg/10 z-10 pointer-events-none"
         opaqueOverlap={opaqueOverlap}
-        powerSave={powerSave}
+        mode={renderMode}
         style={{
           position: "fixed",
           left: "50%",
@@ -222,7 +222,7 @@ export default function DemoPage() {
         glare={glassSettings.glare}
         blurRadius={glassSettings.blurRadius}
         blurEdge={glassSettings.blurEdge}
-        powerSave={powerSave}
+        mode={renderMode}
         style={{
           position: "fixed",
           left: position.x,
@@ -238,8 +238,8 @@ export default function DemoPage() {
       <GlassControls
         settings={glassSettings}
         onChange={setGlassSettings}
-        powerSave={powerSave}
-        onPowerSaveChange={setPowerSave}
+        renderMode={renderMode}
+        onRenderModeChange={setRenderMode}
         mergeLens={mergeLens}
         onMergeLensChange={setMergeLens}
         opaqueOverlap={opaqueOverlap}

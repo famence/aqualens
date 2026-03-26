@@ -13,22 +13,23 @@ import {
   getSharedRenderer,
   updateSharedRendererConfig,
   setOpaqueOverlap,
-  getSharedPowerSaveRenderer,
   DEFAULT_OPTIONS,
-  type AqualensRenderer,
+  AqualensRenderer,
   type AqualensLensInstance,
   type AqualensConfig,
-  type PowerSaveRenderer,
+  type AqualensRenderMode,
   type RefractionOptions,
   type GlareOptions,
 } from "@aqualens/core";
+
+type AnyRenderer = Awaited<ReturnType<typeof getSharedRenderer>>;
 
 export interface AqualensProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   "children"
 > {
   children?: ReactNode;
-  /** Target element for the snapshot background. */
+  /** Target element for the snapshot background (WebGL mode only). */
   snapshotTarget?: HTMLElement | null;
   /** Render resolution multiplier (0.1–3.0). @default 2.0 */
   resolution?: number;
@@ -45,12 +46,18 @@ export interface AqualensProps extends Omit<
 
   /**
    * When true, lenses at higher CSS z-index clip lower ones and sample the original
-   * snapshot (macOS-style). Applies to the shared WebGL renderer only. @default false
+   * snapshot (macOS-style). Applies to WebGL mode only. @default false
    */
   opaqueOverlap?: boolean;
 
-  /** CSS/SVG fallback without WebGL for reduced GPU load. */
-  powerSave?: boolean;
+  /**
+   * Rendering backend selection.
+   * - `"auto"` (default) — SVG preferred; falls back to CSS on low-power devices, WebGL otherwise.
+   * - `"webgl"` — Force WebGL2 pipeline (requires `html2canvas-pro`).
+   * - `"svg"` — Force SVG displacement + CSS backdrop pipeline.
+   * - `"css"` — Force lightweight CSS-only pipeline.
+   */
+  mode?: AqualensRenderMode;
 
   /** Called once after the lens is initialized. */
   onInit?(lens: AqualensLensInstance): void;
@@ -119,7 +126,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       blurRadius,
       blurEdge,
       opaqueOverlap,
-      powerSave,
+      mode = "auto",
       onInit,
       style,
       className,
@@ -131,63 +138,42 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
     const stableRefraction = useShallowMemo(refraction);
     const stableGlare = useShallowMemo(glare);
 
-    const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
-    const rendererRef = useRef<AqualensRenderer | null>(null);
-    const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
+    const [renderer, setRenderer] = useState<AnyRenderer | null>(null);
     const elementRef = useRef<HTMLDivElement>(null);
     const lensRef = useRef<AqualensLensInstance | null>(null);
+    const activeModeRef = useRef<AqualensRenderMode>(mode);
 
     useImperativeHandle(ref, () => ({
-      get lens() {
-        return lensRef.current;
-      },
-      get element() {
-        return elementRef.current;
-      },
+      get lens() { return lensRef.current; },
+      get element() { return elementRef.current; },
     }), []);
 
-    useEffect(() => (
-      () => {
-        rendererRef.current = null;
-        setRenderer(null);
-      }
-    ), []);
-
     useEffect(() => {
-      if (powerSave) {
-        rendererRef.current = null;
-        setRenderer(null);
-        return;
-      }
-
       let cancelled = false;
-      const target = snapshotTarget ?? undefined;
-      const resolutionValue = resolution ?? undefined;
+      activeModeRef.current = mode;
 
-      if (rendererRef.current) {
-        updateSharedRendererConfig(snapshotTarget ?? null, resolution);
-        return;
-      }
+      getSharedRenderer(
+        snapshotTarget ?? null,
+        resolution ?? undefined,
+        mode,
+      ).then((inst) => {
+        if (cancelled) return;
+        setRenderer((prev) => {
+          if (prev === inst) return prev;
+          return inst;
+        });
+      });
 
-      getSharedRenderer(target ?? null, resolutionValue).then(
-        (rendererInstance: AqualensRenderer) => {
-          if (cancelled) return;
-          rendererRef.current = rendererInstance;
-          setRenderer(rendererInstance);
-        },
-      );
-      return () => {
-        cancelled = true;
-      };
-    }, [snapshotTarget, resolution, powerSave]);
+      return () => { cancelled = true; };
+    }, [snapshotTarget, resolution, mode]);
 
     useEffect(() => {
-      if (powerSave || !renderer) return;
+      if (!renderer || !(renderer instanceof AqualensRenderer)) return;
       setOpaqueOverlap(!!opaqueOverlap);
-    }, [opaqueOverlap, powerSave, renderer]);
+    }, [opaqueOverlap, renderer]);
 
     useEffect(() => {
-      if (!elementRef.current) return;
+      if (!elementRef.current || !renderer) return;
 
       const config = buildConfig({
         resolution,
@@ -198,20 +184,6 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
         onInit,
       });
 
-      if (powerSave) {
-        const powerSaveRenderer = getSharedPowerSaveRenderer();
-        powerSaveRendererRef.current = powerSaveRenderer;
-        const lens = powerSaveRenderer.addLens(elementRef.current, config);
-        lensRef.current = lens;
-        return () => {
-          lens.destroy();
-          lensRef.current = null;
-          powerSaveRendererRef.current = null;
-        };
-      }
-
-      if (!renderer) return;
-
       const lens = renderer.addLens(elementRef.current, config);
       lensRef.current = lens;
 
@@ -220,7 +192,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
         lensRef.current = null;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [renderer, powerSave]);
+    }, [renderer]);
 
     useEffect(() => {
       const lens = lensRef.current;
@@ -237,10 +209,8 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       Object.assign(lens.options, next);
       lens.options.tint = preservedTint;
 
-      if (powerSave) {
-        powerSaveRendererRef.current?.requestRender();
-      } else {
-        renderer?.requestRender();
+      if (renderer && "requestRender" in renderer) {
+        (renderer as any).requestRender();
       }
     }, [
       resolution,
@@ -249,7 +219,6 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       blurRadius,
       blurEdge,
       renderer,
-      powerSave,
     ]);
 
     const mergedStyle = useMemo<CSSProperties>(

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Aqualens } from "@aqualens/react";
+import { Aqualens, type AqualensRenderMode } from "@aqualens/react";
 
 export interface GlassSettings {
   refraction: {
@@ -224,11 +224,45 @@ function Section({
   );
 }
 
+const RENDER_MODES: AqualensRenderMode[] = ["auto", "webgl", "svg", "css"];
+
+function ModeSelector({
+  value,
+  onChange,
+}: {
+  value: AqualensRenderMode;
+  onChange: (v: AqualensRenderMode) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between py-0.5">
+      <span className="text-[11px] text-white/50 uppercase tracking-wider font-medium">
+        Render Mode
+      </span>
+      <div className="flex gap-1">
+        {RENDER_MODES.map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onChange(m)}
+            className={`px-2 py-0.5 text-[10px] uppercase tracking-wider rounded transition-all ${
+              value === m
+                ? "bg-white/20 text-white"
+                : "text-white/30 hover:text-white/60"
+            }`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function GlassControls({
   settings,
   onChange,
-  powerSave,
-  onPowerSaveChange,
+  renderMode,
+  onRenderModeChange,
   mergeLens,
   onMergeLensChange,
   opaqueOverlap,
@@ -236,8 +270,8 @@ export function GlassControls({
 }: {
   settings: GlassSettings;
   onChange: (s: GlassSettings) => void;
-  powerSave: boolean;
-  onPowerSaveChange: (v: boolean) => void;
+  renderMode: AqualensRenderMode;
+  onRenderModeChange: (v: AqualensRenderMode) => void;
   mergeLens: boolean;
   onMergeLensChange: (v: boolean) => void;
   opaqueOverlap: boolean;
@@ -266,7 +300,7 @@ export function GlassControls({
     <div className="fixed right-4 top-4 z-100 hidden md:flex flex-col items-end gap-2 select-none">
       <Aqualens
         className="rounded-full shadow-lg bg-black/80"
-        powerSave={powerSave}
+        mode={renderMode}
         opaqueOverlap={opaqueOverlap}
         refraction={PANEL_REFRACTION}
         glare={PANEL_GLARE}
@@ -303,7 +337,7 @@ export function GlassControls({
       {!collapsed && (
         <Aqualens
           className="w-72 rounded-2xl shadow-2xl bg-black/80 z-11"
-          powerSave={powerSave}
+          mode={renderMode}
           opaqueOverlap={opaqueOverlap}
           refraction={PANEL_REFRACTION}
           glare={PANEL_GLARE}
@@ -326,10 +360,9 @@ export function GlassControls({
 
             <div className="px-4 pb-4">
               <div className="flex flex-col gap-2 pb-2 border-b border-white/6 mb-1">
-                <GlassSwitch
-                  label="Power Save"
-                  value={powerSave}
-                  onChange={onPowerSaveChange}
+                <ModeSelector
+                  value={renderMode}
+                  onChange={onRenderModeChange}
                 />
                 <GlassSwitch
                   label="Merge Lenses"

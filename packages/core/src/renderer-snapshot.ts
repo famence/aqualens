@@ -1,4 +1,4 @@
-import html2canvas from "html2canvas-pro";
+import { getHtml2Canvas } from "./html2canvas-loader";
 import type { AqualensRenderer } from "./renderer";
 import { ensureBlurPyramid } from "./renderer-fbo";
 import { discoverAndAddFixedElements } from "./renderer-dynamic";
@@ -198,6 +198,12 @@ export async function captureSnapshotImpl(
           (element as HTMLElement).closest("[data-liquid-ignore]")
         );
       };
+
+      const html2canvas = await getHtml2Canvas();
+      if (!html2canvas) {
+        renderer._capturing = false;
+        return false;
+      }
 
       const snapCanvas = await html2canvas(renderer.snapshotTarget, {
         allowTaint: false,

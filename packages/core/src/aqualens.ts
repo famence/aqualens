@@ -13,12 +13,25 @@ export {
   getSharedPowerSaveRenderer,
 } from "./power-save-renderer";
 
+export {
+  SvgRenderer,
+  SvgLens,
+  getSharedSvgRenderer,
+} from "./svg-renderer";
+
+export {
+  detectSvgFilterSupport,
+  detectLowPower,
+  resolveRenderMode,
+} from "./detect";
+
 export type {
   AqualensOptions,
   AqualensLensOptions,
   AqualensLensInstance,
   AqualensRendererInstance,
   AqualensConfig,
+  AqualensRenderMode,
   RefractionOptions,
   GlareOptions,
   DOMRectLike,
