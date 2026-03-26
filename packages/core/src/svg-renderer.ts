@@ -1,6 +1,4 @@
 import { parseBgColorToRgba } from "./utils";
-import { parseCornerRadius, normalizeCornerRadii, type CornerRadii } from "./css-parser";
-import { generateDisplacementMap } from "./svg-displacement";
 import {
   DEFAULT_TINT,
   type AqualensConfig,
@@ -90,9 +88,6 @@ export class SvgLens implements AqualensLensInstance {
   private _origIsolation: string;
   private _origOverflow: string;
   private _origPosition: string;
-  private _resizeObserver: ResizeObserver | null = null;
-  private _lastWidth = 0;
-  private _lastHeight = 0;
   private _destroyed = false;
 
   constructor(element: HTMLElement, options: AqualensConfig, renderer: SvgRenderer) {
@@ -128,7 +123,6 @@ export class SvgLens implements AqualensLensInstance {
 
     this._buildSvgFilter();
     this._buildOverlays();
-    this._setupResizeObserver();
     this._fireInit();
   }
 
@@ -156,9 +150,6 @@ export class SvgLens implements AqualensLensInstance {
     if (this._destroyed) return;
     this._destroyed = true;
 
-    this._resizeObserver?.disconnect();
-    this._resizeObserver = null;
-
     this._refractionLayer?.remove();
     this._tintElement?.remove();
     this._glareElement?.remove();
@@ -182,127 +173,68 @@ export class SvgLens implements AqualensLensInstance {
     this._renderer.removeLens(this);
   }
 
-  private _getCornerRadii(): CornerRadii {
-    const style = window.getComputedStyle(this.element);
-    const rect = this.element.getBoundingClientRect();
-    const emBase = parseFloat(style.fontSize) || 16;
-
-    const radii: CornerRadii = {
-      tl: parseCornerRadius(style.borderTopLeftRadius, rect as DOMRect, emBase),
-      tr: parseCornerRadius(style.borderTopRightRadius, rect as DOMRect, emBase),
-      br: parseCornerRadius(style.borderBottomRightRadius, rect as DOMRect, emBase),
-      bl: parseCornerRadius(style.borderBottomLeftRadius, rect as DOMRect, emBase),
-    };
-
-    return normalizeCornerRadii(radii, rect.width, rect.height);
-  }
-
   /**
-   * Build SVG filter with displacement map + blur + saturation in one pipeline.
-   * When used as `backdrop-filter: url(#id)`, the entire chain processes the
-   * backdrop content: first displaces, then blurs, then adjusts color.
+   * Build SVG filter using feTurbulence + feDisplacementMap.
+   * Maps refraction params to turbulence parameters:
+   *   thickness → frequency (thicker = lower freq = wider distortion)
+   *   factor → displacement scale
    */
   private _buildSvgFilter(): void {
-    const rect = this.element.getBoundingClientRect();
-    const width = Math.round(rect.width) || 1;
-    const height = Math.round(rect.height) || 1;
-    this._lastWidth = width;
-    this._lastHeight = height;
-
-    const cornerRadii = this._getCornerRadii();
-    const bezelWidth = this.options.refraction.thickness;
-    const factor = this.options.refraction.factor;
-
-    const { dataUrl, maxDisplacement } = generateDisplacementMap(
-      width,
-      height,
-      cornerRadii,
-      bezelWidth,
-      factor,
-    );
-
     const defs = this._renderer.svgDefs;
     if (!defs) return;
 
     this._filterElement?.remove();
 
+    const thickness = this.options.refraction.thickness;
+    const factor = this.options.refraction.factor;
+
+    const baseFreqX = Math.max(0.002, 0.04 / Math.max(1, thickness / 10));
+    const baseFreqY = baseFreqX * 0.85;
+    const scale = Math.max(1, thickness * factor * 0.4);
+
     const filter = document.createElementNS(SVG_NS, "filter");
     filter.setAttribute("id", this._filterId);
-    filter.setAttribute("x", "0");
-    filter.setAttribute("y", "0");
-    filter.setAttribute("width", "100%");
-    filter.setAttribute("height", "100%");
+    filter.setAttribute("x", "-5%");
+    filter.setAttribute("y", "-5%");
+    filter.setAttribute("width", "110%");
+    filter.setAttribute("height", "110%");
     filter.setAttribute("color-interpolation-filters", "sRGB");
 
-    const feImage = document.createElementNS(SVG_NS, "feImage");
-    feImage.setAttribute("href", dataUrl);
-    feImage.setAttribute("x", "0");
-    feImage.setAttribute("y", "0");
-    feImage.setAttribute("width", String(width));
-    feImage.setAttribute("height", String(height));
-    feImage.setAttribute("result", "dispmap");
-    filter.appendChild(feImage);
+    const feTurb = document.createElementNS(SVG_NS, "feTurbulence");
+    feTurb.setAttribute("type", "turbulence");
+    feTurb.setAttribute("baseFrequency", `${baseFreqX.toFixed(4)} ${baseFreqY.toFixed(4)}`);
+    feTurb.setAttribute("numOctaves", "2");
+    feTurb.setAttribute("seed", "42");
+    feTurb.setAttribute("result", "turbulence");
+    filter.appendChild(feTurb);
 
-    const scale = Math.max(1, Math.round(maxDisplacement));
     const feDisp = document.createElementNS(SVG_NS, "feDisplacementMap");
     feDisp.setAttribute("in", "SourceGraphic");
-    feDisp.setAttribute("in2", "dispmap");
-    feDisp.setAttribute("scale", String(scale));
+    feDisp.setAttribute("in2", "turbulence");
+    feDisp.setAttribute("scale", String(Math.round(scale)));
     feDisp.setAttribute("xChannelSelector", "R");
     feDisp.setAttribute("yChannelSelector", "G");
-    feDisp.setAttribute("result", "displaced");
     filter.appendChild(feDisp);
-
-    if (this.options.blurRadius > 0) {
-      const blurPx = this.options.blurRadius * SVG_CSS_BLUR_SCALE;
-      const feBlur = document.createElementNS(SVG_NS, "feGaussianBlur");
-      feBlur.setAttribute("in", "displaced");
-      feBlur.setAttribute("stdDeviation", String(blurPx));
-      feBlur.setAttribute("result", "blurred");
-      filter.appendChild(feBlur);
-
-      const feSat = document.createElementNS(SVG_NS, "feColorMatrix");
-      feSat.setAttribute("in", "blurred");
-      feSat.setAttribute("type", "saturate");
-      feSat.setAttribute("values", "1.4");
-      filter.appendChild(feSat);
-    } else {
-      const feSat = document.createElementNS(SVG_NS, "feColorMatrix");
-      feSat.setAttribute("in", "displaced");
-      feSat.setAttribute("type", "saturate");
-      feSat.setAttribute("values", "1.4");
-      filter.appendChild(feSat);
-    }
 
     defs.appendChild(filter);
     this._filterElement = filter;
   }
 
-  private _rebuildFilter(): void {
-    const rect = this.element.getBoundingClientRect();
-    const width = Math.round(rect.width) || 1;
-    const height = Math.round(rect.height) || 1;
-
-    if (width === this._lastWidth && height === this._lastHeight) return;
-
-    this._buildSvgFilter();
-    this._applyRefractionStyles();
-  }
-
-  private _setupResizeObserver(): void {
-    if (typeof ResizeObserver === "undefined") return;
-    this._resizeObserver = new ResizeObserver(() => {
-      if (this._destroyed) return;
-      this._rebuildFilter();
-    });
-    this._resizeObserver.observe(this.element);
-  }
-
   private _applyRefractionStyles(): void {
     if (!this._refractionLayer) return;
-    const filterUrl = `url(#${this._filterId})`;
-    this._refractionLayer.style.backdropFilter = filterUrl;
-    (this._refractionLayer.style as any).webkitBackdropFilter = filterUrl;
+    const options = this.options;
+
+    const parts: string[] = [];
+    if (options.blurRadius > 0) {
+      const cssBlurPx = options.blurRadius * SVG_CSS_BLUR_SCALE;
+      parts.push(`blur(${cssBlurPx}px)`);
+    }
+    parts.push("saturate(1.4)", "brightness(1.06)");
+
+    const backdropFilter = parts.join(" ");
+    this._refractionLayer.style.backdropFilter = backdropFilter;
+    (this._refractionLayer.style as any).webkitBackdropFilter = backdropFilter;
+    this._refractionLayer.style.filter = `url(#${this._filterId})`;
   }
 
   private _buildOverlays(): void {
@@ -310,7 +242,7 @@ export class SvgLens implements AqualensLensInstance {
     refLayer.setAttribute("data-lsvg-refraction", "");
     refLayer.style.cssText =
       "position:absolute;inset:0;z-index:-2;pointer-events:none;border-radius:inherit;";
-    this._applyRefractionStylesTo(refLayer);
+    this._applyRefractionStylesInit(refLayer);
     this.element.insertBefore(refLayer, this.element.firstChild);
     this._refractionLayer = refLayer;
 
@@ -348,10 +280,17 @@ export class SvgLens implements AqualensLensInstance {
     this._glareElement = glare;
   }
 
-  private _applyRefractionStylesTo(el: HTMLDivElement): void {
-    const filterUrl = `url(#${this._filterId})`;
-    el.style.backdropFilter = filterUrl;
-    (el.style as any).webkitBackdropFilter = filterUrl;
+  private _applyRefractionStylesInit(el: HTMLDivElement): void {
+    const options = this.options;
+    const parts: string[] = [];
+    if (options.blurRadius > 0) {
+      const cssBlurPx = options.blurRadius * SVG_CSS_BLUR_SCALE;
+      parts.push(`blur(${cssBlurPx}px)`);
+    }
+    parts.push("saturate(1.4)", "brightness(1.06)");
+    el.style.backdropFilter = parts.join(" ");
+    (el.style as any).webkitBackdropFilter = parts.join(" ");
+    el.style.filter = `url(#${this._filterId})`;
   }
 
   private _applyTint(): void {
