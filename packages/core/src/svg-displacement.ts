@@ -17,9 +17,6 @@ function surfaceHeight(x: number): number {
   return Math.pow(1 - Math.pow(1 - clamped, 4), 0.25);
 }
 
-/**
- * Numerical derivative of the surface function at a given point.
- */
 function surfaceDerivative(x: number): number {
   const delta = 0.001;
   const y1 = surfaceHeight(x - delta);
@@ -28,11 +25,9 @@ function surfaceDerivative(x: number): number {
 }
 
 /**
- * Given a surface derivative, compute the angle of incidence
- * and apply Snell's law to get refracted displacement.
- *
- * Rays are orthogonal to the background plane (coming straight down).
- * The surface normal is derived from the derivative rotated by -90 degrees.
+ * Snell's law displacement: how far a ray shifts when passing through
+ * a glass surface of a given height at a given slope.
+ * Convex glass bends rays inward.
  */
 function computeDisplacement(
   derivative: number,
@@ -59,7 +54,6 @@ function computeDisplacement(
 
 /**
  * Pre-calculate displacement magnitudes for 128 samples across the bezel.
- * Returns normalized displacements (0..1) and the maximum displacement in pixels.
  */
 function precomputeBezelDisplacements(
   bezelWidthPx: number,
@@ -90,10 +84,6 @@ function precomputeBezelDisplacements(
   return { normalized, maxDisplacement: maxMag };
 }
 
-/**
- * Compute the signed distance from a point to a rounded rectangle border.
- * Returns positive values inside the shape, negative outside.
- */
 function signedDistanceRoundedRect(
   px: number,
   py: number,
@@ -116,26 +106,20 @@ function signedDistanceRoundedRect(
   const hw = width / 2;
   const hh = height / 2;
 
-  const inCornerX = qx > hw - r;
-  const inCornerY = qy > hh - r;
-
-  if (inCornerX && inCornerY) {
+  if (qx > hw - r && qy > hh - r) {
     const cornerDx = qx - (hw - r);
     const cornerDy = qy - (hh - r);
-    const cornerDist = Math.sqrt(cornerDx * cornerDx + cornerDy * cornerDy);
-    return r - cornerDist;
+    return r - Math.sqrt(cornerDx * cornerDx + cornerDy * cornerDy);
   }
 
-  const distX = hw - qx;
-  const distY = hh - qy;
-  return Math.min(distX, distY);
+  return Math.min(hw - qx, hh - qy);
 }
 
 /**
- * Compute the outward-pointing normal direction at a point near the border
- * of a rounded rectangle. Returns [nx, ny] normalized.
+ * Inward-pointing normal at a point near the border (toward element center).
+ * Used to orient the displacement so convex glass refracts background inward.
  */
-function borderNormal(
+function borderNormalInward(
   px: number,
   py: number,
   width: number,
@@ -146,8 +130,8 @@ function borderNormal(
   const cy = height / 2;
   const qx = Math.abs(px - cx);
   const qy = Math.abs(py - cy);
-  const sx = px < cx ? -1 : 1;
-  const sy = py < cy ? -1 : 1;
+  const sx = px < cx ? 1 : -1;
+  const sy = py < cy ? 1 : -1;
 
   let r: number;
   if (px < cx) {
@@ -159,14 +143,11 @@ function borderNormal(
   const hw = width / 2;
   const hh = height / 2;
 
-  const inCornerX = qx > hw - r;
-  const inCornerY = qy > hh - r;
-
-  if (inCornerX && inCornerY) {
-    const cornerCx = (hw - r) * sx + cx;
-    const cornerCy = (hh - r) * sy + cy;
-    const dx = px - cornerCx;
-    const dy = py - cornerCy;
+  if (qx > hw - r && qy > hh - r) {
+    const cornerCx = cx + (hw - r) * (px < cx ? -1 : 1);
+    const cornerCy = cy + (hh - r) * (py < cy ? -1 : 1);
+    const dx = cornerCx - px;
+    const dy = cornerCy - py;
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
     return [dx / len, dy / len];
   }
@@ -174,17 +155,17 @@ function borderNormal(
   const distX = hw - qx;
   const distY = hh - qy;
 
-  if (distX < distY) {
-    return [sx, 0];
-  }
+  if (distX < distY) return [sx, 0];
   return [0, sy];
 }
 
+const MAP_DOWNSCALE = 4;
+const MAX_DISPLACEMENT_PX = 12;
+
 /**
- * Generate an SVG displacement map image for a rounded rectangle element.
- *
- * The displacement map encodes X displacement in the Red channel and
- * Y displacement in the Green channel, with 128 as the neutral value (no displacement).
+ * Generate a displacement map image for a rounded-rect element.
+ * Red = X displacement, Green = Y displacement, 128 = neutral.
+ * The map is generated at reduced resolution for performance.
  */
 export function generateDisplacementMap(
   width: number,
@@ -193,14 +174,26 @@ export function generateDisplacementMap(
   bezelWidthPx: number,
   refractionFactor: number,
 ): DisplacementMapResult {
-  const w = Math.max(1, Math.round(width));
-  const h = Math.max(1, Math.round(height));
+  const fullW = Math.max(1, Math.round(width));
+  const fullH = Math.max(1, Math.round(height));
+  const w = Math.max(1, Math.round(fullW / MAP_DOWNSCALE));
+  const h = Math.max(1, Math.round(fullH / MAP_DOWNSCALE));
+  const scale = MAP_DOWNSCALE;
   const clampedBezel = Math.max(1, bezelWidthPx);
 
-  const { normalized, maxDisplacement } = precomputeBezelDisplacements(
+  const scaledRadii: CornerRadii = {
+    tl: cornerRadii.tl / scale,
+    tr: cornerRadii.tr / scale,
+    br: cornerRadii.br / scale,
+    bl: cornerRadii.bl / scale,
+  };
+  const scaledBezel = clampedBezel / scale;
+
+  const { normalized, maxDisplacement: rawMax } = precomputeBezelDisplacements(
     clampedBezel,
     refractionFactor,
   );
+  const maxDisplacement = Math.min(rawMax, MAX_DISPLACEMENT_PX);
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -213,9 +206,9 @@ export function generateDisplacementMap(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
-      const dist = signedDistanceRoundedRect(x + 0.5, y + 0.5, w, h, cornerRadii);
+      const dist = signedDistanceRoundedRect(x + 0.5, y + 0.5, w, h, scaledRadii);
 
-      if (dist < 0) {
+      if (dist < 0 || dist >= scaledBezel) {
         data[idx] = 128;
         data[idx + 1] = 128;
         data[idx + 2] = 128;
@@ -223,25 +216,17 @@ export function generateDisplacementMap(
         continue;
       }
 
-      if (dist >= clampedBezel) {
-        data[idx] = 128;
-        data[idx + 1] = 128;
-        data[idx + 2] = 128;
-        data[idx + 3] = 255;
-        continue;
-      }
-
-      const t = dist / clampedBezel;
+      const t = dist / scaledBezel;
       const sampleIdx = Math.min(samples - 1, Math.floor(t * samples));
       const magnitude = normalized[sampleIdx];
 
-      const [nx, ny] = borderNormal(x + 0.5, y + 0.5, w, h, cornerRadii);
+      const [nx, ny] = borderNormalInward(x + 0.5, y + 0.5, w, h, scaledRadii);
 
       const dispX = nx * magnitude;
       const dispY = ny * magnitude;
 
-      data[idx] = Math.round(128 + dispX * 127);
-      data[idx + 1] = Math.round(128 + dispY * 127);
+      data[idx] = Math.max(0, Math.min(255, Math.round(128 + dispX * 127)));
+      data[idx + 1] = Math.max(0, Math.min(255, Math.round(128 + dispY * 127)));
       data[idx + 2] = 128;
       data[idx + 3] = 255;
     }
