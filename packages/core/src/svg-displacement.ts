@@ -8,10 +8,6 @@ export interface DisplacementMapResult {
 const IOR_GLASS = 1.5;
 const IOR_AIR = 1.0;
 
-/**
- * Convex squircle surface: y = (1 - (1-x)^4)^(1/4)
- * x ranges from 0 (outer edge) to 1 (end of bezel / flat interior).
- */
 function surfaceHeight(x: number): number {
   const clamped = Math.max(0, Math.min(1, x));
   return Math.pow(1 - Math.pow(1 - clamped, 4), 0.25);
@@ -19,16 +15,9 @@ function surfaceHeight(x: number): number {
 
 function surfaceDerivative(x: number): number {
   const delta = 0.001;
-  const y1 = surfaceHeight(x - delta);
-  const y2 = surfaceHeight(x + delta);
-  return (y2 - y1) / (2 * delta);
+  return (surfaceHeight(x + delta) - surfaceHeight(x - delta)) / (2 * delta);
 }
 
-/**
- * Snell's law displacement: how far a ray shifts when passing through
- * a glass surface of a given height at a given slope.
- * Convex glass bends rays inward.
- */
 function computeDisplacement(
   derivative: number,
   ior: number,
@@ -52,9 +41,6 @@ function computeDisplacement(
   return displacement * Math.sign(derivative);
 }
 
-/**
- * Pre-calculate displacement magnitudes for 128 samples across the bezel.
- */
 function precomputeBezelDisplacements(
   bezelWidthPx: number,
   refractionFactor: number,
@@ -70,15 +56,12 @@ function precomputeBezelDisplacements(
     const height = surfaceHeight(t) * bezelWidthPx;
     const disp = computeDisplacement(deriv, ior, height);
     raw[i] = disp;
-    const mag = Math.abs(disp);
-    if (mag > maxMag) maxMag = mag;
+    if (Math.abs(disp) > maxMag) maxMag = Math.abs(disp);
   }
 
   const normalized = new Float32Array(samples);
   if (maxMag > 0) {
-    for (let i = 0; i < samples; i++) {
-      normalized[i] = raw[i] / maxMag;
-    }
+    for (let i = 0; i < samples; i++) normalized[i] = raw[i] / maxMag;
   }
 
   return { normalized, maxDisplacement: maxMag };
@@ -115,10 +98,6 @@ function signedDistanceRoundedRect(
   return Math.min(hw - qx, hh - qy);
 }
 
-/**
- * Inward-pointing normal at a point near the border (toward element center).
- * Used to orient the displacement so convex glass refracts background inward.
- */
 function borderNormalInward(
   px: number,
   py: number,
@@ -152,20 +131,13 @@ function borderNormalInward(
     return [dx / len, dy / len];
   }
 
-  const distX = hw - qx;
-  const distY = hh - qy;
-
-  if (distX < distY) return [sx, 0];
+  if (hw - qx < hh - qy) return [sx, 0];
   return [0, sy];
 }
 
-const MAP_DOWNSCALE = 4;
-const MAX_DISPLACEMENT_PX = 12;
-
 /**
- * Generate a displacement map image for a rounded-rect element.
+ * Generate a displacement map at full resolution.
  * Red = X displacement, Green = Y displacement, 128 = neutral.
- * The map is generated at reduced resolution for performance.
  */
 export function generateDisplacementMap(
   width: number,
@@ -174,26 +146,14 @@ export function generateDisplacementMap(
   bezelWidthPx: number,
   refractionFactor: number,
 ): DisplacementMapResult {
-  const fullW = Math.max(1, Math.round(width));
-  const fullH = Math.max(1, Math.round(height));
-  const w = Math.max(1, Math.round(fullW / MAP_DOWNSCALE));
-  const h = Math.max(1, Math.round(fullH / MAP_DOWNSCALE));
-  const scale = MAP_DOWNSCALE;
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
   const clampedBezel = Math.max(1, bezelWidthPx);
 
-  const scaledRadii: CornerRadii = {
-    tl: cornerRadii.tl / scale,
-    tr: cornerRadii.tr / scale,
-    br: cornerRadii.br / scale,
-    bl: cornerRadii.bl / scale,
-  };
-  const scaledBezel = clampedBezel / scale;
-
-  const { normalized, maxDisplacement: rawMax } = precomputeBezelDisplacements(
+  const { normalized, maxDisplacement } = precomputeBezelDisplacements(
     clampedBezel,
     refractionFactor,
   );
-  const maxDisplacement = Math.min(rawMax, MAX_DISPLACEMENT_PX);
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -206,9 +166,9 @@ export function generateDisplacementMap(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
-      const dist = signedDistanceRoundedRect(x + 0.5, y + 0.5, w, h, scaledRadii);
+      const dist = signedDistanceRoundedRect(x + 0.5, y + 0.5, w, h, cornerRadii);
 
-      if (dist < 0 || dist >= scaledBezel) {
+      if (dist < 0 || dist >= clampedBezel) {
         data[idx] = 128;
         data[idx + 1] = 128;
         data[idx + 2] = 128;
@@ -216,17 +176,14 @@ export function generateDisplacementMap(
         continue;
       }
 
-      const t = dist / scaledBezel;
+      const t = dist / clampedBezel;
       const sampleIdx = Math.min(samples - 1, Math.floor(t * samples));
       const magnitude = normalized[sampleIdx];
 
-      const [nx, ny] = borderNormalInward(x + 0.5, y + 0.5, w, h, scaledRadii);
+      const [nx, ny] = borderNormalInward(x + 0.5, y + 0.5, w, h, cornerRadii);
 
-      const dispX = nx * magnitude;
-      const dispY = ny * magnitude;
-
-      data[idx] = Math.max(0, Math.min(255, Math.round(128 + dispX * 127)));
-      data[idx + 1] = Math.max(0, Math.min(255, Math.round(128 + dispY * 127)));
+      data[idx] = Math.max(0, Math.min(255, Math.round(128 + nx * magnitude * 127)));
+      data[idx + 1] = Math.max(0, Math.min(255, Math.round(128 + ny * magnitude * 127)));
       data[idx + 2] = 128;
       data[idx + 3] = 255;
     }

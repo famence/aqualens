@@ -6,65 +6,86 @@ import type { AqualensRenderMode } from "./types";
 
 type AnyRenderer = AqualensRenderer | SvgRenderer | PowerSaveRenderer;
 
-let instance: AnyRenderer | null = null;
-let initPromise: Promise<AnyRenderer> | null = null;
-let resolvedMode: "webgl" | "svg" | "css" | null = null;
+const instances = new Map<string, AnyRenderer>();
+const initPromises = new Map<string, Promise<AnyRenderer>>();
+let currentMode: "webgl" | "svg" | "css" | null = null;
 
 let lastSnapshotTarget: HTMLElement | null = null;
 let lastResolution: number | null = null;
 
 /**
- * Returns the shared Aqualens renderer. On first call, resolves the render mode
- * and creates the appropriate backend. Subsequent calls return the same instance.
+ * Returns a shared renderer for the given mode. Each concrete mode (webgl/svg/css)
+ * has its own cached instance so switching modes at runtime works correctly.
  */
 export function getSharedRenderer(
   snapshotTarget?: HTMLElement | null,
   resolution?: number,
   mode?: AqualensRenderMode,
 ): Promise<AnyRenderer> {
-  if (instance) return Promise.resolve(instance);
-  if (initPromise) return initPromise;
+  const requestedMode = mode ?? "auto";
 
-  initPromise = (async () => {
-    const resolved = await resolveRenderMode(mode ?? "auto");
-    resolvedMode = resolved;
+  if (requestedMode !== "auto") {
+    const existing = instances.get(requestedMode);
+    if (existing) {
+      currentMode = requestedMode as "webgl" | "svg" | "css";
+      return Promise.resolve(existing);
+    }
+    const pending = initPromises.get(requestedMode);
+    if (pending) return pending;
+  } else {
+    if (currentMode && instances.has(currentMode)) {
+      return Promise.resolve(instances.get(currentMode)!);
+    }
+    const pending = initPromises.get("auto");
+    if (pending) return pending;
+  }
+
+  const promiseKey = requestedMode;
+
+  const promise = (async () => {
+    const resolved = await resolveRenderMode(requestedMode);
+    currentMode = resolved;
+
+    const cached = instances.get(resolved);
+    if (cached) return cached;
+
+    let renderer: AnyRenderer;
 
     if (resolved === "css") {
-      const renderer = getSharedPowerSaveRenderer();
-      instance = renderer;
-      return renderer;
+      renderer = getSharedPowerSaveRenderer();
+    } else if (resolved === "svg") {
+      renderer = getSharedSvgRenderer();
+    } else {
+      const target = snapshotTarget ?? document.body;
+      const resolutionValue = Math.max(0.1, Math.min(3.0, resolution ?? 2.0));
+      lastSnapshotTarget = target;
+      lastResolution = resolutionValue;
+
+      const webglRenderer = new AqualensRenderer(target, resolutionValue);
+      await webglRenderer.captureSnapshot();
+      webglRenderer.startRenderLoop();
+      renderer = webglRenderer;
     }
 
-    if (resolved === "svg") {
-      const renderer = getSharedSvgRenderer();
-      instance = renderer;
-      return renderer;
-    }
-
-    const target = snapshotTarget ?? document.body;
-    const resolutionValue = Math.max(0.1, Math.min(3.0, resolution ?? 2.0));
-    lastSnapshotTarget = target;
-    lastResolution = resolutionValue;
-
-    const renderer = new AqualensRenderer(target, resolutionValue);
-    await renderer.captureSnapshot();
-    renderer.startRenderLoop();
-    instance = renderer;
+    instances.set(resolved, renderer);
+    initPromises.delete(promiseKey);
     return renderer;
   })();
 
-  return initPromise;
+  initPromises.set(promiseKey, promise);
+  return promise;
 }
 
 /**
- * Updates the shared WebGL renderer's snapshot target and/or resolution, then recaptures.
- * No-op for SVG and CSS renderers (they don't use snapshots).
+ * Updates the shared WebGL renderer's snapshot target and/or resolution.
+ * No-op for SVG and CSS renderers.
  */
 export function updateSharedRendererConfig(
   snapshotTarget?: HTMLElement | null,
   resolution?: number,
 ): Promise<void> {
-  if (!instance || !(instance instanceof AqualensRenderer))
+  const webgl = instances.get("webgl");
+  if (!webgl || !(webgl instanceof AqualensRenderer))
     return Promise.resolve();
 
   const target =
@@ -73,21 +94,20 @@ export function updateSharedRendererConfig(
     resolution !== undefined
       ? Math.max(0.1, Math.min(3.0, resolution))
       : null;
-  const targetChanged =
-    target !== null && target !== lastSnapshotTarget;
+  const targetChanged = target !== null && target !== lastSnapshotTarget;
   const resolutionChanged =
     resolutionValue !== null && (lastResolution === null || resolutionValue !== lastResolution);
   if (!targetChanged && !resolutionChanged) return Promise.resolve();
 
   if (targetChanged && target !== null) {
-    instance.setSnapshotTarget(target);
+    webgl.setSnapshotTarget(target);
     lastSnapshotTarget = target;
   }
   if (resolutionChanged && resolutionValue !== null) {
-    instance.setResolution(resolutionValue);
+    webgl.setResolution(resolutionValue);
     lastResolution = resolutionValue;
   }
-  return instance.captureSnapshot().then(() => {});
+  return webgl.captureSnapshot().then(() => {});
 }
 
 /**
@@ -95,13 +115,13 @@ export function updateSharedRendererConfig(
  * No-op for SVG and CSS renderers.
  */
 export function setOpaqueOverlap(value: boolean): void {
-  if (!instance || !(instance instanceof AqualensRenderer)) return;
-  if (instance.opaqueOverlap === value) return;
-  instance.opaqueOverlap = value;
-  instance.requestRender();
+  const webgl = instances.get("webgl");
+  if (!webgl || !(webgl instanceof AqualensRenderer)) return;
+  if (webgl.opaqueOverlap === value) return;
+  webgl.opaqueOverlap = value;
+  webgl.requestRender();
 }
 
-/** Returns the resolved mode after initialization, or null if not yet initialized. */
 export function getResolvedMode(): "webgl" | "svg" | "css" | null {
-  return resolvedMode;
+  return currentMode;
 }

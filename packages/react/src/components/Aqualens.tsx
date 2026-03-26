@@ -139,50 +139,32 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
     const stableGlare = useShallowMemo(glare);
 
     const [renderer, setRenderer] = useState<AnyRenderer | null>(null);
-    const rendererRef = useRef<AnyRenderer | null>(null);
     const elementRef = useRef<HTMLDivElement>(null);
     const lensRef = useRef<AqualensLensInstance | null>(null);
+    const activeModeRef = useRef<AqualensRenderMode>(mode);
 
     useImperativeHandle(ref, () => ({
-      get lens() {
-        return lensRef.current;
-      },
-      get element() {
-        return elementRef.current;
-      },
+      get lens() { return lensRef.current; },
+      get element() { return elementRef.current; },
     }), []);
-
-    useEffect(() => (
-      () => {
-        rendererRef.current = null;
-        setRenderer(null);
-      }
-    ), []);
 
     useEffect(() => {
       let cancelled = false;
-
-      if (rendererRef.current) {
-        if (rendererRef.current instanceof AqualensRenderer) {
-          updateSharedRendererConfig(snapshotTarget ?? null, resolution);
-        }
-        return;
-      }
+      activeModeRef.current = mode;
 
       getSharedRenderer(
         snapshotTarget ?? null,
         resolution ?? undefined,
         mode,
-      ).then(
-        (rendererInstance) => {
-          if (cancelled) return;
-          rendererRef.current = rendererInstance;
-          setRenderer(rendererInstance);
-        },
-      );
-      return () => {
-        cancelled = true;
-      };
+      ).then((inst) => {
+        if (cancelled) return;
+        setRenderer((prev) => {
+          if (prev === inst) return prev;
+          return inst;
+        });
+      });
+
+      return () => { cancelled = true; };
     }, [snapshotTarget, resolution, mode]);
 
     useEffect(() => {
