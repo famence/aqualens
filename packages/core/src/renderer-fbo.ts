@@ -1,6 +1,6 @@
 import type { AqualensRenderer } from "./renderer";
 import type { AqualensLens } from "./lens";
-import { createFBO, type BlurPyramidLevel } from "./gl-utils";
+import { createFBO } from "./gl-utils";
 
 const MAX_BLUR_LEVELS = 7;
 
@@ -331,4 +331,197 @@ export function flattenGroupToCompose(
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindVertexArray(null);
+}
+
+function ensureLensContentTex(
+  renderer: AqualensRenderer,
+  width: number,
+  height: number,
+): void {
+  const gl = renderer.gl;
+  if (!renderer._lensContentTex) {
+    renderer._lensContentTex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  if (
+    width > renderer._lensContentTexW ||
+    height > renderer._lensContentTexH
+  ) {
+    const newW = Math.max(width, renderer._lensContentTexW);
+    const newH = Math.max(height, renderer._lensContentTexH);
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      newW,
+      newH,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null,
+    );
+    renderer._lensContentTexW = newW;
+    renderer._lensContentTexH = newH;
+  }
+}
+
+/**
+ * After flattening a group's glass effect into the compose FBO, paint each
+ * lens's cached DOM-content capture on top so that higher stacking groups
+ * can distort the content through refraction/blur.
+ */
+export function compositeLensContentToCompose(
+  renderer: AqualensRenderer,
+  lenses: AqualensLens[],
+  snapRect: DOMRect,
+): void {
+  const gl = renderer.gl;
+  if (!renderer._composeFbo || !renderer._composeTex) return;
+
+  let anyDrawn = false;
+
+  for (const lens of lenses) {
+    if (!lens._contentCapture) continue;
+    const rect = lens.rectPx;
+    if (!rect) continue;
+
+    const texX = Math.round(
+      (rect.left - snapRect.left) * renderer.scaleFactor,
+    );
+    const texY = Math.round(
+      (rect.top - snapRect.top) * renderer.scaleFactor,
+    );
+    const texW = Math.round(rect.width * renderer.scaleFactor);
+    const texH = Math.round(rect.height * renderer.scaleFactor);
+
+    if (texW <= 0 || texH <= 0) continue;
+    if (texX + texW <= 0 || texY + texH <= 0) continue;
+    if (texX >= renderer.textureWidth || texY >= renderer.textureHeight)
+      continue;
+
+    const captureW = lens._contentCapture.width;
+    const captureH = lens._contentCapture.height;
+    if (captureW <= 0 || captureH <= 0) continue;
+
+    ensureLensContentTex(renderer, captureW, captureH);
+
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      lens._contentCapture,
+    );
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, renderer._composeFbo);
+    gl.viewport(texX, texY, texW, texH);
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    gl.useProgram(renderer._compositeProgram);
+    gl.bindVertexArray(renderer._vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.uniform1i(renderer._compositeU.src, 0);
+    gl.uniform2f(
+      renderer._compositeU.srcRegion,
+      captureW / renderer._lensContentTexW,
+      captureH / renderer._lensContentTexH,
+    );
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    anyDrawn = true;
+  }
+
+  if (anyDrawn) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindVertexArray(null);
+  }
+}
+
+/**
+ * Render each lens's cached DOM-content capture directly on the main canvas
+ * (default framebuffer) so that the content appears on the WebGL layer.
+ * This allows higher-z-index canvas rendering to cover the original DOM text
+ * while keeping the content visible through the glass.
+ *
+ * NOTE: uploads WITHOUT UNPACK_FLIP_Y because the default framebuffer has
+ * a different Y convention than the compose FBO.
+ */
+export function renderLensContentOnCanvas(
+  renderer: AqualensRenderer,
+  lenses: AqualensLens[],
+  dpr: number,
+  overscrollX: number,
+  overscrollY: number,
+): void {
+  const gl = renderer.gl;
+  let anyDrawn = false;
+
+  for (const lens of lenses) {
+    if (!lens._contentCapture) continue;
+    const rect = lens.rectPx;
+    if (!rect) continue;
+
+    const captureW = lens._contentCapture.width;
+    const captureH = lens._contentCapture.height;
+    if (captureW <= 0 || captureH <= 0) continue;
+
+    const viewportX = Math.round((rect.left + overscrollX) * dpr);
+    const viewportY = Math.round(
+      renderer.canvas.height - (rect.top + overscrollY + rect.height) * dpr,
+    );
+    const viewportW = Math.ceil(rect.width * dpr);
+    const viewportH = Math.ceil(rect.height * dpr);
+    if (viewportW <= 0 || viewportH <= 0) continue;
+
+    ensureLensContentTex(renderer, captureW, captureH);
+
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      lens._contentCapture,
+    );
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(viewportX, viewportY, viewportW, viewportH);
+
+    gl.useProgram(renderer._compositeProgram);
+    gl.bindVertexArray(renderer._vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
+    gl.uniform1i(renderer._compositeU.src, 0);
+    gl.uniform2f(
+      renderer._compositeU.srcRegion,
+      captureW / renderer._lensContentTexW,
+      captureH / renderer._lensContentTexH,
+    );
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    anyDrawn = true;
+  }
+
+  if (anyDrawn) {
+    gl.bindVertexArray(null);
+  }
 }

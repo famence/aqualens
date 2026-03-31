@@ -26,6 +26,7 @@ import {
   copyToCompose,
   runKawaseBlur,
   flattenGroupToCompose,
+  renderLensContentOnCanvas,
 } from "./renderer-fbo";
 import {
   resizeCanvas,
@@ -45,6 +46,7 @@ import {
   updateDynamicNodes,
   addDynamicElementImpl,
   isIgnored,
+  triggerLensContentCaptures,
 } from "./renderer-dynamic";
 
 export class AqualensRenderer implements AqualensRendererInstance {
@@ -89,6 +91,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _canvasCopyTex: WebGLTexture | null = null;
   _canvasCopyTexW = 0;
   _canvasCopyTexH = 0;
+
+  _lensContentTex: WebGLTexture | null = null;
+  _lensContentTexW = 0;
+  _lensContentTexH = 0;
+  _lensContentRecaptureInFlight = 0;
   _compositeProgram!: WebGLProgram;
   _compositeU!: {
     src: WebGLUniformLocation | null;
@@ -144,6 +151,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _implicitScratch: AqualensLens[] = [];
   _singleGroupScratch: AqualensLens[] = [];
   _visibleScratch: AqualensLens[] = [];
+  _cascadeZActive = false;
 
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
     this.canvas = document.createElement("canvas");
@@ -459,6 +467,14 @@ export class AqualensRenderer implements AqualensRendererInstance {
     if (needCascade && !opaqueCascade) {
       ensureComposeFbo(this);
       copyToCompose(this);
+      triggerLensContentCaptures(this);
+      if (!this._cascadeZActive) {
+        this.canvas.style.zIndex = "2147483647";
+        this._cascadeZActive = true;
+      }
+    } else if (this._cascadeZActive) {
+      this.canvas.style.zIndex = "";
+      this._cascadeZActive = false;
     }
 
     const blurStale =
@@ -535,8 +551,21 @@ export class AqualensRenderer implements AqualensRendererInstance {
         );
       }
 
+      if (needCascade && !opaqueCascade) {
+        renderLensContentOnCanvas(
+          this,
+          visible,
+          dpr,
+          overscrollX,
+          overscrollY,
+        );
+      }
+
       if (needCascade && !opaqueCascade && groupIdx < totalGroups - 1) {
         flattenGroupToCompose(this, visible, dpr);
+        if (this._currentBlurRadius > 0 && this._composeTex) {
+          runKawaseBlur(this, this._composeTex);
+        }
       }
     }
 
@@ -667,6 +696,14 @@ export class AqualensRenderer implements AqualensRendererInstance {
     }
     destroyBlurPyramid(this);
     destroyComposeFbo(this);
+    if (this._lensContentTex) {
+      this.gl.deleteTexture(this._lensContentTex);
+      this._lensContentTex = null;
+    }
+    if (this._cascadeZActive) {
+      this.canvas.style.zIndex = "";
+      this._cascadeZActive = false;
+    }
     this.canvas.remove();
     const styleElement = document.getElementById("liquid-gl-dynamic-styles");
     styleElement?.remove();

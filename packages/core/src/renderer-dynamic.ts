@@ -967,6 +967,55 @@ export function addDynamicElementImpl(
   renderer._dynamicNodes.push({ element: element, _cleanup: cleanupRemoved });
 }
 
+const MAX_CONCURRENT_LENS_CONTENT_CAPTURE = 2;
+
+export function triggerLensContentCaptures(
+  renderer: AqualensRenderer,
+): void {
+  for (const lens of renderer.lenses) {
+    if (!lens._contentCaptureDirty || lens._contentCapturing) continue;
+    if (!lens.element.isConnected || !lens.rectPx) continue;
+    if (
+      renderer._lensContentRecaptureInFlight >=
+      MAX_CONCURRENT_LENS_CONTENT_CAPTURE
+    )
+      return;
+
+    lens._contentCapturing = true;
+    renderer._lensContentRecaptureInFlight += 1;
+
+    const objectFitPatch = prepareObjectFitPatch(lens.element);
+
+    html2canvas(lens.element, {
+      backgroundColor: null,
+      scale: renderer.scaleFactor,
+      useCORS: true,
+      removeContainer: true,
+      logging: false,
+      ignoreElements: (el: Element) =>
+        el.tagName === "CANVAS" ||
+        (el as HTMLElement).hasAttribute("data-liquid-ignore"),
+      onclone: objectFitPatch.onclone,
+    })
+      .then((canvas) => {
+        if (canvas.width > 0 && canvas.height > 0) {
+          lens._contentCapture = canvas;
+          lens._contentCaptureDirty = false;
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        lens._contentCapturing = false;
+        renderer._lensContentRecaptureInFlight = Math.max(
+          0,
+          renderer._lensContentRecaptureInFlight - 1,
+        );
+        objectFitPatch.cleanup();
+        renderer.requestRender();
+      });
+  }
+}
+
 function ensureDynamicRemovalObserver(
   renderer: AqualensRenderer,
 ): void {

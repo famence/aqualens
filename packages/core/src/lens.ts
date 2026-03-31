@@ -43,12 +43,17 @@ export class AqualensLens implements AqualensLensInstance {
   private _styleMetricsDirty = true;
   private _lastRectW = 0;
   private _lastRectH = 0;
-  private _boundInvalidateStyle?: () => void;
+  private readonly _boundInvalidateStyle?: () => void;
   private _attrObserver: MutationObserver | null = null;
   private _styleAnimationRaf: number | null = null;
   private _activeStyleAnimations = 0;
-  private _boundStartStyleAnimation?: EventListener;
-  private _boundStopStyleAnimation?: EventListener;
+  private readonly _boundStartStyleAnimation?: EventListener;
+  private readonly _boundStopStyleAnimation?: EventListener;
+
+  _contentCapture: HTMLCanvasElement | null = null;
+  _contentCaptureDirty = true;
+  _contentCapturing = false;
+  _contentObserver: MutationObserver | null = null;
 
   constructor(
     renderer: AqualensRenderer,
@@ -196,6 +201,18 @@ export class AqualensLens implements AqualensLensInstance {
         attributeFilter: ["style", "class"],
       });
     }
+
+    if (typeof MutationObserver !== "undefined") {
+      this._contentObserver = new MutationObserver(() => {
+        this._contentCaptureDirty = true;
+        this.renderer.requestRender();
+      });
+      this._contentObserver.observe(this.element, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
   }
 
   /** HOT: called every render for every lens; rect only read when dirty, style/radii when dirty. */
@@ -300,6 +317,9 @@ export class AqualensLens implements AqualensLensInstance {
     this._sizeObs?.disconnect();
     this._attrObserver?.disconnect();
     this._attrObserver = null;
+    this._contentObserver?.disconnect();
+    this._contentObserver = null;
+    this._contentCapture = null;
     this._activeStyleAnimations = 0;
     if (this._styleAnimationRaf !== null) {
       cancelAnimationFrame(this._styleAnimationRaf);
