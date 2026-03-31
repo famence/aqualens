@@ -1,5 +1,11 @@
 # @aqualens/core
 
+## 2.0.0
+
+### Major Changes
+
+- [`5017edb`](https://github.com/famence/aqualens/commit/5017edb83613b231b746e93b755301504e697855) Thanks [@famence](https://github.com/famence)! - Introduce stackingIndex property instead of css z-index for cascading lenses
+
 ## 1.1.0
 
 ### Minor Changes
