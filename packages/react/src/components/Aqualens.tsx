@@ -137,21 +137,26 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
     const elementRef = useRef<HTMLDivElement>(null);
     const lensRef = useRef<AqualensLensInstance | null>(null);
 
-    useImperativeHandle(ref, () => ({
-      get lens() {
-        return lensRef.current;
-      },
-      get element() {
-        return elementRef.current;
-      },
-    }), []);
+    useImperativeHandle(
+      ref,
+      () => ({
+        get lens() {
+          return lensRef.current;
+        },
+        get element() {
+          return elementRef.current;
+        },
+      }),
+      [],
+    );
 
-    useEffect(() => (
-      () => {
+    useEffect(
+      () => () => {
         rendererRef.current = null;
         setRenderer(null);
-      }
-    ), []);
+      },
+      [],
+    );
 
     useEffect(() => {
       if (powerSave) {
@@ -251,6 +256,36 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       renderer,
       powerSave,
     ]);
+
+    const hasChildren = children != null && children !== false;
+
+    useEffect(() => {
+      if (!hasChildren || powerSave || !elementRef.current) return;
+
+      let target: HTMLElement | null = null;
+      let node: HTMLElement | null = elementRef.current;
+
+      while (node && node !== document.body) {
+        const cs = window.getComputedStyle(node);
+        if (cs.position === "fixed") {
+          const z = cs.zIndex;
+          if (z === "auto" || parseInt(z, 10) <= 0) {
+            target = node;
+          }
+          break;
+        }
+        node = node.parentElement;
+      }
+
+      if (!target) return;
+
+      const origZ = target.style.zIndex;
+      target.style.zIndex = "1";
+
+      return () => {
+        target!.style.zIndex = origZ;
+      };
+    }, [hasChildren, powerSave]);
 
     const mergedStyle = useMemo<CSSProperties>(
       () => ({ position: "relative" as const, ...style }),
