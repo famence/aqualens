@@ -64,6 +64,13 @@ export interface AqualensOptions {
   blurRadius?: number;
   /** Clip blur at element edges to prevent bleeding. @default true */
   blurEdge?: boolean;
+  /**
+   * Explicit stacking index that controls lens merge grouping and overlay priority.
+   * Lenses with the same stackingIndex merge together; higher values render on top.
+   * When omitted, the lens is rendered individually (no merging) in natural DOM order
+   * and always below any lens that has an explicit stackingIndex.
+   */
+  stackingIndex?: number;
   /** Lifecycle callbacks. */
   on?: {
     /** Called once after the lens is initialized and ready to render. */
@@ -88,6 +95,11 @@ export interface AqualensConfig {
   glare: Required<GlareOptions>;
   blurRadius: number;
   blurEdge: boolean;
+  /**
+   * When set, lenses with the same value merge together and render above implicit ones.
+   * When undefined, the lens is rendered individually in natural order, below explicit lenses.
+   */
+  stackingIndex?: number;
   /** Filled by the lens from computed `background-color` before the backdrop runs. */
   tint: TintColor;
   on: AqualensOptions["on"];
@@ -111,6 +123,7 @@ export interface AqualensLensInstance {
     br: number;
     bl: number;
   };
+  getEffectiveZ(): number;
   updateMetrics(): void;
   destroy(): void;
 }
@@ -133,10 +146,7 @@ export interface AqualensRendererInstance {
   textureHeight: number;
   scaleFactor: number;
   useExternalTicker: boolean;
-  addLens(
-    element: HTMLElement,
-    options: AqualensConfig,
-  ): AqualensLensInstance;
+  addLens(element: HTMLElement, options: AqualensConfig): AqualensLensInstance;
   render(): void;
   captureSnapshot(): Promise<boolean>;
   addDynamicElement(element: HTMLElement | HTMLElement[] | string): void;

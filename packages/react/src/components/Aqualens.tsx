@@ -23,10 +23,8 @@ import {
   type GlareOptions,
 } from "@aqualens/core";
 
-export interface AqualensProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  "children"
-> {
+export interface AqualensProps
+  extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   children?: ReactNode;
   /** Target element for the snapshot background. */
   snapshotTarget?: HTMLElement | null;
@@ -44,8 +42,17 @@ export interface AqualensProps extends Omit<
   blurEdge?: boolean;
 
   /**
-   * When true, lenses at higher CSS z-index clip lower ones and sample the original
-   * snapshot (macOS-style). Applies to the shared WebGL renderer only. @default false
+   * Explicit stacking index that controls lens merge grouping and overlay priority.
+   * Lenses with the same stackingIndex merge together; higher values render on top.
+   * When omitted, the lens is rendered individually (no merging) in natural DOM order
+   * and always below any lens that has an explicit stackingIndex.
+   */
+  stackingIndex?: number;
+
+  /**
+   * When true, lenses at different stackingIndex values clip lower ones and sample
+   * the original snapshot (macOS-style). Applies to the shared WebGL renderer only.
+   * @default false
    */
   opaqueOverlap?: boolean;
 
@@ -79,9 +86,7 @@ function shallowEqual<T extends object>(
   return true;
 }
 
-function useShallowMemo<T extends object>(
-  value: T | undefined,
-): T | undefined {
+function useShallowMemo<T extends object>(value: T | undefined): T | undefined {
   const ref = useRef(value);
   if (!shallowEqual(ref.current, value)) {
     ref.current = value;
@@ -95,6 +100,7 @@ function buildConfig(options: {
   glare?: GlareOptions;
   blurRadius?: number;
   blurEdge?: boolean;
+  stackingIndex?: number;
   onInit?: (lens: AqualensLensInstance) => void;
 }): AqualensConfig {
   return {
@@ -104,6 +110,7 @@ function buildConfig(options: {
     glare: { ...DEFAULT_OPTIONS.glare, ...options.glare },
     blurRadius: options.blurRadius ?? DEFAULT_OPTIONS.blurRadius,
     blurEdge: options.blurEdge ?? DEFAULT_OPTIONS.blurEdge,
+    stackingIndex: options.stackingIndex,
     on: options.onInit ? { init: options.onInit } : {},
   };
 }
@@ -118,6 +125,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       glare,
       blurRadius,
       blurEdge,
+      stackingIndex,
       opaqueOverlap,
       powerSave,
       onInit,
@@ -200,6 +208,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
         glare: stableGlare,
         blurRadius,
         blurEdge,
+        stackingIndex,
         onInit,
       });
 
@@ -237,6 +246,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
         glare: stableGlare,
         blurRadius,
         blurEdge,
+        stackingIndex,
         onInit: lens.options.on?.init,
       });
       Object.assign(lens.options, next);
@@ -253,6 +263,7 @@ export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
       stableGlare,
       blurRadius,
       blurEdge,
+      stackingIndex,
       renderer,
       powerSave,
     ]);

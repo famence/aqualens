@@ -1,4 +1,8 @@
-import { parseBgColorToRgba, parseBoxShadow, effectiveZ, type ShadowParams } from "./utils";
+import {
+  parseBgColorToRgba,
+  parseBoxShadow,
+  type ShadowParams,
+} from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import {
   DEFAULT_TINT,
@@ -33,8 +37,6 @@ export class AqualensLens implements AqualensLensInstance {
 
   private _sizeObs: ResizeObserver | null = null;
 
-  _cachedZ = 0;
-  private _zDirty = true;
   _rectDirty = true;
 
   /** When true, next updateMetrics() will re-read getComputedStyle and recalc corner radii. */
@@ -227,7 +229,8 @@ export class AqualensLens implements AqualensLensInstance {
       }
     }
 
-    if (!this.rectPx || this.rectPx.width <= 0 || this.rectPx.height <= 0) return;
+    if (!this.rectPx || this.rectPx.width <= 0 || this.rectPx.height <= 0)
+      return;
     if (!this._styleMetricsDirty) return;
 
     this._styleMetricsDirty = false;
@@ -251,11 +254,7 @@ export class AqualensLens implements AqualensLensInstance {
       style.borderRadius !== "0px" &&
       style.borderRadius !== "none"
     ) {
-      const fallback = parseCornerRadius(
-        style.borderRadius.trim(),
-        rp,
-        emBase,
-      );
+      const fallback = parseCornerRadius(style.borderRadius.trim(), rp, emBase);
       if (Number.isFinite(fallback) && fallback > 0) {
         rawCorners = { tl: fallback, tr: fallback, br: fallback, bl: fallback };
       }
@@ -278,15 +277,10 @@ export class AqualensLens implements AqualensLensInstance {
   invalidateStyleMetrics(): void {
     this._styleMetricsDirty = true;
     this._rectDirty = true;
-    this._zDirty = true;
   }
 
   getEffectiveZ(): number {
-    if (this._zDirty) {
-      this._cachedZ = effectiveZ(this.element);
-      this._zDirty = false;
-    }
-    return this._cachedZ;
+    return this.options.stackingIndex ?? 0;
   }
 
   _activate(): void {

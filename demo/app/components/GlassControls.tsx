@@ -272,6 +272,7 @@ export function GlassControls({
         glare={PANEL_GLARE}
         blurRadius={0}
         blurEdge
+        stackingIndex={10}
       >
         <button
           type="button"
@@ -309,6 +310,7 @@ export function GlassControls({
           glare={PANEL_GLARE}
           blurRadius={0}
           blurEdge
+          stackingIndex={11}
         >
           <div className="max-h-[calc(100vh-7rem)] overflow-y-auto overscroll-contain">
             <div className="px-4 pt-4 pb-1 flex items-baseline justify-between">

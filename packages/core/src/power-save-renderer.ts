@@ -83,6 +83,10 @@ export class PowerSaveLens implements AqualensLensInstance {
     this._fireInit();
   }
 
+  getEffectiveZ(): number {
+    return this.options.stackingIndex ?? 0;
+  }
+
   updateMetrics(): void {
     const rect = this.element.getBoundingClientRect();
     this.rectPx = {

@@ -169,6 +169,7 @@ export default function DemoPage() {
             blurRadius={10}
             blurEdge
             powerSave={powerSave}
+            stackingIndex={1}
           >
             <div className="p-8 h-full flex flex-col items-start justify-between text-white">
               <p className="text-xs tracking-[0.35em] uppercase text-white/70">
@@ -213,10 +214,11 @@ export default function DemoPage() {
           transform: "translate(-50%, -50%)",
           willChange: "transform",
         }}
+        stackingIndex={1}
       />
 
       <Aqualens
-        className={`pointer-events-none rounded-full shadow-lg hidden md:block ${mergeLens ? "z-10" : "z-30"}`}
+        className="pointer-events-none rounded-full shadow-lg hidden md:block"
         opaqueOverlap={opaqueOverlap}
         refraction={glassSettings.refraction}
         glare={glassSettings.glare}
@@ -233,6 +235,7 @@ export default function DemoPage() {
           willChange: "transform",
           backgroundColor: `rgba(${tintRgb.r}, ${tintRgb.g}, ${tintRgb.b}, ${glassSettings.tintAlpha})`,
         }}
+        stackingIndex={mergeLens ? 1 : 2}
       />
 
       <GlassControls

@@ -13,10 +13,10 @@ export function isIgnored(element: HTMLElement): boolean {
   );
 }
 
-function getMaxLensZ(renderer: AqualensRenderer): number {
+function getMaxLensCssZ(renderer: AqualensRenderer): number {
   let maxZ = 0;
   for (const lens of renderer.lenses) {
-    const z = lens.getEffectiveZ();
+    const z = effectiveZ(lens.element);
     if (z > maxZ) maxZ = z;
   }
   return maxZ;
@@ -246,7 +246,7 @@ export function updateDynamicVideos(renderer: AqualensRenderer): void {
     return;
   const gl = renderer.gl;
   const snapRect = renderer.snapshotTarget.getBoundingClientRect();
-  const maxLensZ = getMaxLensZ(renderer);
+  const maxLensZ = getMaxLensCssZ(renderer);
 
   const lensRects = renderer.lenses
     .filter((lens) => lens.element.isConnected)
@@ -435,7 +435,7 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
   const gl = renderer.gl;
   if (!renderer.texture || !renderer._dynMeta) return;
   const snapRect = renderer.snapshotTarget.getBoundingClientRect();
-  const maxLensZ = getMaxLensZ(renderer);
+  const maxLensZ = getMaxLensCssZ(renderer);
   const lensRects = renderer.lenses
     .filter((lens) => lens.element.isConnected)
     .map((lens) => lens.rectPx)

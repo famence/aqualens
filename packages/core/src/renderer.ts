@@ -52,8 +52,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
   gl: WebGL2RenderingContext;
   lenses: AqualensLens[] = [];
   /**
-   * When true and lenses use different z-indices, higher layers clip lower ones
-   * and each lens samples the original snapshot (macOS-style overlap).
+   * When true and lenses use different stackingIndex values, higher layers clip
+   * lower ones and each lens samples the original snapshot (macOS-style overlap).
    */
   opaqueOverlap = false;
   texture: WebGLTexture | null = null;
@@ -141,6 +141,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
   _zGroupMap = new Map<number, AqualensLens[]>();
   _sortedZKeys: number[] = [];
+  _implicitScratch: AqualensLens[] = [];
+  _singleGroupScratch: AqualensLens[] = [];
   _visibleScratch: AqualensLens[] = [];
 
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
@@ -282,8 +284,16 @@ export class AqualensRenderer implements AqualensRendererInstance {
   private _initGL(): void {
     const gl = this.gl;
 
-    this._kawaseDownProgram = createProgramGL2(gl, VERTEX_SHADER, KAWASE_DOWN_FRAGMENT);
-    this._kawaseUpProgram = createProgramGL2(gl, VERTEX_SHADER, KAWASE_UP_FRAGMENT);
+    this._kawaseDownProgram = createProgramGL2(
+      gl,
+      VERTEX_SHADER,
+      KAWASE_DOWN_FRAGMENT,
+    );
+    this._kawaseUpProgram = createProgramGL2(
+      gl,
+      VERTEX_SHADER,
+      KAWASE_UP_FRAGMENT,
+    );
     this._mainProgram = createProgramGL2(gl, VERTEX_SHADER, MAIN_FRAGMENT);
     this._maskProgram = createProgramGL2(gl, VERTEX_SHADER, MASK_FRAGMENT);
 
@@ -414,26 +424,36 @@ export class AqualensRenderer implements AqualensRendererInstance {
       lens.updateMetrics();
     }
 
-    const zGroups = this._zGroupMap;
-    for (const [, group] of zGroups) group.length = 0;
+    const implicitLenses = this._implicitScratch;
+    implicitLenses.length = 0;
+
+    const explicitGroups = this._zGroupMap;
+    for (const [, group] of explicitGroups) group.length = 0;
+
     for (const lens of this.lenses) {
-      const zIndex = lens.getEffectiveZ();
-      let group = zGroups.get(zIndex);
-      if (!group) {
-        group = [];
-        zGroups.set(zIndex, group);
+      if (lens.options.stackingIndex !== undefined) {
+        const si = lens.options.stackingIndex;
+        let group = explicitGroups.get(si);
+        if (!group) {
+          group = [];
+          explicitGroups.set(si, group);
+        }
+        group.push(lens);
+      } else {
+        implicitLenses.push(lens);
       }
-      group.push(lens);
     }
 
-    const sortedZ = this._sortedZKeys;
-    sortedZ.length = 0;
-    for (const key of zGroups.keys()) {
-      if (zGroups.get(key)!.length > 0) sortedZ.push(key);
+    const sortedExplicitKeys = this._sortedZKeys;
+    sortedExplicitKeys.length = 0;
+    for (const key of explicitGroups.keys()) {
+      if (explicitGroups.get(key)!.length > 0) sortedExplicitKeys.push(key);
     }
-    sortedZ.sort((a, b) => a - b);
+    sortedExplicitKeys.sort((a, b) => a - b);
 
-    const needCascade = sortedZ.length > 1;
+    const implicitCount = implicitLenses.length;
+    const totalGroups = implicitCount + sortedExplicitKeys.length;
+    const needCascade = totalGroups > 1;
     const opaqueCascade = needCascade && this.opaqueOverlap;
 
     if (needCascade && !opaqueCascade) {
@@ -453,9 +473,19 @@ export class AqualensRenderer implements AqualensRendererInstance {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-    for (let zIndex = 0; zIndex < sortedZ.length; zIndex++) {
-      const currentZ = sortedZ[zIndex];
-      const group = zGroups.get(currentZ)!;
+    const singleGroup = this._singleGroupScratch;
+
+    for (let groupIdx = 0; groupIdx < totalGroups; groupIdx++) {
+      let group: AqualensLens[];
+
+      if (groupIdx < implicitCount) {
+        singleGroup[0] = implicitLenses[groupIdx];
+        singleGroup.length = 1;
+        group = singleGroup;
+      } else {
+        const ek = sortedExplicitKeys[groupIdx - implicitCount];
+        group = explicitGroups.get(ek)!;
+      }
 
       if (needCascade && !opaqueCascade) {
         this._activeSourceTex = this._composeTex;
@@ -480,7 +510,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
         }
       }
 
-      if (opaqueCascade && zIndex > 0 && visible.length > 0) {
+      if (opaqueCascade && groupIdx > 0 && visible.length > 0) {
         gl.enable(gl.BLEND);
         gl.blendFuncSeparate(
           gl.ZERO,
@@ -488,14 +518,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
           gl.ZERO,
           gl.ONE_MINUS_SRC_ALPHA,
         );
-        renderGroupMask(
-          this,
-          visible,
-          dpr,
-          snapRect,
-          overscrollX,
-          overscrollY,
-        );
+        renderGroupMask(this, visible, dpr, snapRect, overscrollX, overscrollY);
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       }
 
@@ -512,7 +535,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
         );
       }
 
-      if (needCascade && !opaqueCascade && zIndex < sortedZ.length - 1) {
+      if (needCascade && !opaqueCascade && groupIdx < totalGroups - 1) {
         flattenGroupToCompose(this, visible, dpr);
       }
     }
