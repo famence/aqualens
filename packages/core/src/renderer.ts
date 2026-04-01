@@ -477,10 +477,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this._cascadeZActive = false;
     }
 
+    const cascadeActive = needCascade && !opaqueCascade;
     const blurStale =
       this._blurredForTextureVersion !== this._textureVersion ||
       this._blurredForRadius !== this._currentBlurRadius;
-    if (this._currentBlurRadius > 0 && blurStale) {
+    if (this._currentBlurRadius > 0 && (blurStale || cascadeActive)) {
       runKawaseBlur(this);
       this._blurredForTextureVersion = this._textureVersion;
       this._blurredForRadius = this._currentBlurRadius;
