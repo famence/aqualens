@@ -357,8 +357,8 @@ export function GlassControls({
                 <Slider
                   label="Factor"
                   value={settings.refraction.factor}
-                  min={1}
-                  max={4}
+                  min={0}
+                  max={3}
                   step={0.01}
                   onChange={(v) => updateRefraction("factor", v)}
                 />

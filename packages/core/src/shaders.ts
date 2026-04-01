@@ -433,8 +433,8 @@ void main() {
 
     float xr = 1.0 - nm / mat.refThickness;
     float tI = asin(pow(clamp(xr, 0.0, 1.0), 2.0));
-    float tT = asin(sin(tI) / mat.refFactor);
-    float ef = -tan(tT - tI);
+    float tT = asin(sin(tI) / 1.5);
+    float ef = -tan(tT - tI) * mat.refFactor;
     if (nm >= mat.refThickness) ef = 0.0;
 
     float tintMix = (mat.tint.a >= 0.9999) ? 1.0 : (mat.tint.a * 0.8);

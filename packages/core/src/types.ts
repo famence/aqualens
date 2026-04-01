@@ -16,7 +16,7 @@ export const DEFAULT_TINT: TintColor = { r: 255, g: 255, b: 255, a: 0 };
 export interface RefractionOptions {
   /** Glass thickness in pixels — higher values produce stronger distortion. @default 20 */
   thickness?: number;
-  /** Refraction intensity multiplier. @default 1.4 */
+  /** Refraction intensity multiplier (0 = no refraction). @default 1 */
   factor?: number;
   /** Chromatic aberration (color fringing) amount. @default 7 */
   dispersion?: number;
@@ -157,7 +157,7 @@ export const DEFAULT_OPTIONS: AqualensConfig = {
   resolution: 2.0,
   refraction: {
     thickness: 20,
-    factor: 1.4,
+    factor: 1,
     dispersion: 7,
     fresnelRange: 0,
     fresnelHardness: 0,
