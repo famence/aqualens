@@ -49,6 +49,13 @@ import {
   triggerLensContentCaptures,
 } from "./renderer-dynamic";
 
+const DYNAMIC_STYLES_CSS = `
+html:not([data-liquid-power-save="true"]):not([data-liquid-snapshot="true"]) [data-liquid-reveal] {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+`;
+
 export class AqualensRenderer implements AqualensRendererInstance {
   canvas: HTMLCanvasElement;
   gl: WebGL2RenderingContext;
@@ -228,6 +235,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     const styleElement = document.createElement("style");
     styleElement.id = "liquid-gl-dynamic-styles";
+    styleElement.textContent = DYNAMIC_STYLES_CSS;
     document.head.appendChild(styleElement);
     this._dynamicStyleSheet = styleElement.sheet;
 

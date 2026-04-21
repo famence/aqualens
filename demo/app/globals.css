@@ -5,11 +5,6 @@
     @apply min-h-full font-sans antialiased leading-normal bg-[#f0f0f0] text-[#333333];
   }
 
-  html:not([data-liquid-power-save="true"]):not([data-liquid-snapshot="true"])
-    [data-liquid-reveal] {
-    opacity: 0 !important;
-    visibility: hidden !important;
-  }
 }
 
 .glass-scroll-shape {
