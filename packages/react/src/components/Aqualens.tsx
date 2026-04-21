@@ -7,7 +7,6 @@ import React, {
   useImperativeHandle,
   type CSSProperties,
   type ReactNode,
-  type HTMLAttributes,
 } from "react";
 import {
   getSharedRenderer,
@@ -23,8 +22,7 @@ import {
   type GlareOptions,
 } from "@aqualens/core";
 
-export interface AqualensProps
-  extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+interface AqualensOwnProps {
   children?: ReactNode;
   /** Target element for the snapshot background. */
   snapshotTarget?: HTMLElement | null;
@@ -63,13 +61,24 @@ export interface AqualensProps
   onInit?(lens: AqualensLensInstance): void;
   style?: CSSProperties;
   className?: string;
-  as?: React.ElementType;
 }
+
+export type AqualensProps<C extends React.ElementType = "div"> =
+  AqualensOwnProps & {
+    as?: C;
+  } & Omit<
+      React.ComponentPropsWithoutRef<C>,
+      keyof AqualensOwnProps | "as" | "children"
+    >;
 
 export interface AqualensRef {
   lens: AqualensLensInstance | null;
-  element: HTMLDivElement | null;
+  element: HTMLElement | null;
 }
+
+type AqualensComponent = <C extends React.ElementType = "div">(
+  props: AqualensProps<C> & React.RefAttributes<AqualensRef>,
+) => React.ReactElement | null;
 
 function shallowEqual<T extends object>(
   a: T | undefined,
@@ -115,205 +124,205 @@ function buildConfig(options: {
   };
 }
 
-export const Aqualens = forwardRef<AqualensRef, AqualensProps>(
-  function Aqualens(
-    {
-      children,
-      snapshotTarget,
+const AqualensInner = <C extends React.ElementType = "div">(
+  {
+    children,
+    snapshotTarget,
+    resolution,
+    refraction,
+    glare,
+    blurRadius,
+    blurEdge,
+    stackingIndex,
+    opaqueOverlap,
+    powerSave,
+    onInit,
+    style,
+    className,
+    as: Tag,
+    ...rest
+  }: AqualensProps<C>,
+  ref: React.ForwardedRef<AqualensRef>,
+) => {
+  const stableRefraction = useShallowMemo(refraction);
+  const stableGlare = useShallowMemo(glare);
+
+  const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
+  const rendererRef = useRef<AqualensRenderer | null>(null);
+  const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
+  const elementRef = useRef<HTMLElement | null>(null);
+  const lensRef = useRef<AqualensLensInstance | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      get lens() {
+        return lensRef.current;
+      },
+      get element() {
+        return elementRef.current;
+      },
+    }),
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      rendererRef.current = null;
+      setRenderer(null);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (powerSave) {
+      rendererRef.current = null;
+      setRenderer(null);
+      return;
+    }
+
+    let cancelled = false;
+    const target = snapshotTarget ?? undefined;
+    const resolutionValue = resolution ?? undefined;
+
+    if (rendererRef.current) {
+      updateSharedRendererConfig(snapshotTarget ?? null, resolution);
+      return;
+    }
+
+    getSharedRenderer(target ?? null, resolutionValue).then(
+      (rendererInstance: AqualensRenderer) => {
+        if (cancelled) return;
+        rendererRef.current = rendererInstance;
+        setRenderer(rendererInstance);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotTarget, resolution, powerSave]);
+
+  useEffect(() => {
+    if (powerSave || !renderer) return;
+    setOpaqueOverlap(!!opaqueOverlap);
+  }, [opaqueOverlap, powerSave, renderer]);
+
+  useEffect(() => {
+    if (!elementRef.current) return;
+
+    const config = buildConfig({
       resolution,
-      refraction,
-      glare,
+      refraction: stableRefraction,
+      glare: stableGlare,
       blurRadius,
       blurEdge,
       stackingIndex,
-      opaqueOverlap,
-      powerSave,
       onInit,
-      style,
-      className,
-      as: Tag = "div",
-      ...rest
-    },
-    ref,
-  ) {
-    const stableRefraction = useShallowMemo(refraction);
-    const stableGlare = useShallowMemo(glare);
+    });
 
-    const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
-    const rendererRef = useRef<AqualensRenderer | null>(null);
-    const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
-    const elementRef = useRef<HTMLDivElement>(null);
-    const lensRef = useRef<AqualensLensInstance | null>(null);
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        get lens() {
-          return lensRef.current;
-        },
-        get element() {
-          return elementRef.current;
-        },
-      }),
-      [],
-    );
-
-    useEffect(
-      () => () => {
-        rendererRef.current = null;
-        setRenderer(null);
-      },
-      [],
-    );
-
-    useEffect(() => {
-      if (powerSave) {
-        rendererRef.current = null;
-        setRenderer(null);
-        return;
-      }
-
-      let cancelled = false;
-      const target = snapshotTarget ?? undefined;
-      const resolutionValue = resolution ?? undefined;
-
-      if (rendererRef.current) {
-        updateSharedRendererConfig(snapshotTarget ?? null, resolution);
-        return;
-      }
-
-      getSharedRenderer(target ?? null, resolutionValue).then(
-        (rendererInstance: AqualensRenderer) => {
-          if (cancelled) return;
-          rendererRef.current = rendererInstance;
-          setRenderer(rendererInstance);
-        },
-      );
-      return () => {
-        cancelled = true;
-      };
-    }, [snapshotTarget, resolution, powerSave]);
-
-    useEffect(() => {
-      if (powerSave || !renderer) return;
-      setOpaqueOverlap(!!opaqueOverlap);
-    }, [opaqueOverlap, powerSave, renderer]);
-
-    useEffect(() => {
-      if (!elementRef.current) return;
-
-      const config = buildConfig({
-        resolution,
-        refraction: stableRefraction,
-        glare: stableGlare,
-        blurRadius,
-        blurEdge,
-        stackingIndex,
-        onInit,
-      });
-
-      if (powerSave) {
-        const powerSaveRenderer = getSharedPowerSaveRenderer();
-        powerSaveRendererRef.current = powerSaveRenderer;
-        const lens = powerSaveRenderer.addLens(elementRef.current, config);
-        lensRef.current = lens;
-        return () => {
-          lens.destroy();
-          lensRef.current = null;
-          powerSaveRendererRef.current = null;
-        };
-      }
-
-      if (!renderer) return;
-
-      const lens = renderer.addLens(elementRef.current, config);
+    if (powerSave) {
+      const powerSaveRenderer = getSharedPowerSaveRenderer();
+      powerSaveRendererRef.current = powerSaveRenderer;
+      const lens = powerSaveRenderer.addLens(elementRef.current, config);
       lensRef.current = lens;
-
       return () => {
         lens.destroy();
         lensRef.current = null;
+        powerSaveRendererRef.current = null;
       };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [renderer, powerSave]);
+    }
 
-    useEffect(() => {
-      const lens = lensRef.current;
-      if (!lens) return;
-      const preservedTint = lens.options.tint;
-      const next = buildConfig({
-        resolution,
-        refraction: stableRefraction,
-        glare: stableGlare,
-        blurRadius,
-        blurEdge,
-        stackingIndex,
-        onInit: lens.options.on?.init,
-      });
-      Object.assign(lens.options, next);
-      lens.options.tint = preservedTint;
+    if (!renderer) return;
 
-      if (powerSave) {
-        powerSaveRendererRef.current?.requestRender();
-      } else {
-        renderer?.requestRender();
-      }
-    }, [
+    const lens = renderer.addLens(elementRef.current, config);
+    lensRef.current = lens;
+
+    return () => {
+      lens.destroy();
+      lensRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer, powerSave]);
+
+  useEffect(() => {
+    const lens = lensRef.current;
+    if (!lens) return;
+    const preservedTint = lens.options.tint;
+    const next = buildConfig({
       resolution,
-      stableRefraction,
-      stableGlare,
+      refraction: stableRefraction,
+      glare: stableGlare,
       blurRadius,
       blurEdge,
       stackingIndex,
-      renderer,
-      powerSave,
-    ]);
+      onInit: lens.options.on?.init,
+    });
+    Object.assign(lens.options, next);
+    lens.options.tint = preservedTint;
 
-    const hasChildren = children != null && children !== false;
+    if (powerSave) {
+      powerSaveRendererRef.current?.requestRender();
+    } else {
+      renderer?.requestRender();
+    }
+  }, [
+    resolution,
+    stableRefraction,
+    stableGlare,
+    blurRadius,
+    blurEdge,
+    stackingIndex,
+    renderer,
+    powerSave,
+  ]);
 
-    useEffect(() => {
-      if (!hasChildren || powerSave || !elementRef.current) return;
+  const hasChildren = children != null && children !== false;
 
-      let target: HTMLElement | null = null;
-      let node: HTMLElement | null = elementRef.current;
+  useEffect(() => {
+    if (!hasChildren || powerSave || !elementRef.current) return;
 
-      while (node && node !== document.body) {
-        const cs = window.getComputedStyle(node);
-        if (cs.position === "fixed") {
-          const z = cs.zIndex;
-          if (z === "auto" || parseInt(z, 10) <= 0) {
-            target = node;
-          }
-          break;
+    let target: HTMLElement | null = null;
+    let node: HTMLElement | null = elementRef.current;
+
+    while (node && node !== document.body) {
+      const cs = window.getComputedStyle(node);
+      if (cs.position === "fixed") {
+        const z = cs.zIndex;
+        if (z === "auto" || parseInt(z, 10) <= 0) {
+          target = node;
         }
-        node = node.parentElement;
+        break;
       }
+      node = node.parentElement;
+    }
 
-      if (!target) return;
+    if (!target) return;
 
-      const origZ = target.style.zIndex;
-      target.style.zIndex = "1";
+    const origZ = target.style.zIndex;
+    target.style.zIndex = "1";
 
-      return () => {
-        target!.style.zIndex = origZ;
-      };
-    }, [hasChildren, powerSave]);
+    return () => {
+      target!.style.zIndex = origZ;
+    };
+  }, [hasChildren, powerSave]);
 
     const mergedStyle = useMemo<CSSProperties>(
       () => ({ position: "relative" as const, ...style }),
       [style],
     );
 
-    const Component = Tag as React.ElementType;
+  const Component = (Tag ?? "div") as React.ElementType;
 
-    return (
-      <Component
-        ref={elementRef}
-        className={className}
-        style={mergedStyle}
-        {...rest}
-      >
-        {children}
-      </Component>
-    );
-  },
-);
+  return (
+    <Component
+      ref={elementRef as React.Ref<HTMLElement>}
+      className={className}
+      style={mergedStyle}
+      {...rest}
+    >
+      {children}
+    </Component>
+  );
+};
+
+export const Aqualens = forwardRef(AqualensInner) as AqualensComponent;
