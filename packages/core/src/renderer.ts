@@ -48,9 +48,17 @@ import {
   isIgnored,
   triggerLensContentCaptures,
 } from "./renderer-dynamic";
+import {
+  compositeRevealsForStackingIndex,
+  destroyRevealResources,
+  discoverReveals,
+  hasEligibleReveals,
+  triggerRevealCaptures,
+  type RevealMeta,
+} from "./renderer-reveal";
 
 const DYNAMIC_STYLES_CSS = `
-html:not([data-liquid-power-save="true"]):not([data-liquid-snapshot="true"]) [data-liquid-reveal] {
+html:not([data-liquid-power-save="true"]) [data-liquid-reveal] {
   opacity: 0 !important;
   visibility: hidden !important;
 }
@@ -160,6 +168,15 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _visibleScratch: AqualensLens[] = [];
   _cascadeZActive = false;
 
+  _revealNodes: RevealMeta[] = [];
+  _revealComposited = new Set<RevealMeta>();
+  _revealCaptureInFlight = 0;
+  _revealUploadTex: WebGLTexture | null = null;
+  _revealUploadTexW = 0;
+  _revealUploadTexH = 0;
+  _revealObserver: MutationObserver | null = null;
+  _revealDiscoveryScheduled = false;
+
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
     this.canvas = document.createElement("canvas");
     this.canvas.style.cssText =
@@ -238,6 +255,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
     styleElement.textContent = DYNAMIC_STYLES_CSS;
     document.head.appendChild(styleElement);
     this._dynamicStyleSheet = styleElement.sheet;
+
+    this._installRevealObserver();
 
     resizeCanvas(this);
 
@@ -472,10 +491,20 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const needCascade = totalGroups > 1;
     const opaqueCascade = needCascade && this.opaqueOverlap;
 
-    if (needCascade && !opaqueCascade) {
+    const revealsActive = hasEligibleReveals(this);
+    if (revealsActive) triggerRevealCaptures(this);
+
+    const cascadeActive = needCascade && !opaqueCascade;
+    const useCompose = cascadeActive || revealsActive;
+    this._revealComposited.clear();
+
+    if (useCompose) {
       ensureComposeFbo(this);
       copyToCompose(this);
-      triggerLensContentCaptures(this);
+      if (cascadeActive) triggerLensContentCaptures(this);
+    }
+
+    if (cascadeActive) {
       if (!this._cascadeZActive) {
         this.canvas.style.zIndex = "2147483647";
         this._cascadeZActive = true;
@@ -485,12 +514,17 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this._cascadeZActive = false;
     }
 
-    const cascadeActive = needCascade && !opaqueCascade;
     const blurStale =
       this._blurredForTextureVersion !== this._textureVersion ||
       this._blurredForRadius !== this._currentBlurRadius;
-    if (this._currentBlurRadius > 0 && (blurStale || cascadeActive)) {
-      runKawaseBlur(this);
+    if (
+      this._currentBlurRadius > 0 &&
+      (blurStale || cascadeActive || useCompose)
+    ) {
+      runKawaseBlur(
+        this,
+        useCompose ? this._composeTex ?? undefined : undefined,
+      );
       this._blurredForTextureVersion = this._textureVersion;
       this._blurredForRadius = this._currentBlurRadius;
     }
@@ -512,8 +546,20 @@ export class AqualensRenderer implements AqualensRendererInstance {
         group = explicitGroups.get(ek)!;
       }
 
-      if (needCascade && !opaqueCascade) {
+      if (useCompose) {
         this._activeSourceTex = this._composeTex;
+      }
+
+      if (revealsActive && groupIdx >= implicitCount) {
+        const explicitKey = sortedExplicitKeys[groupIdx - implicitCount];
+        const addedReveals = compositeRevealsForStackingIndex(
+          this,
+          explicitKey,
+          snapRect,
+        );
+        if (addedReveals && this._currentBlurRadius > 0 && this._composeTex) {
+          runKawaseBlur(this, this._composeTex);
+        }
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -580,6 +626,56 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     this._activeSourceTex = null;
     gl.disable(gl.BLEND);
+  }
+
+  private _installRevealObserver(): void {
+    if (typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver((mutations) => {
+      let shouldSync = false;
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") {
+          if (
+            mutation.addedNodes.length > 0 ||
+            mutation.removedNodes.length > 0
+          ) {
+            shouldSync = true;
+            break;
+          }
+        } else if (
+          mutation.type === "attributes" &&
+          mutation.attributeName === "data-liquid-reveal"
+        ) {
+          shouldSync = true;
+          break;
+        }
+      }
+      if (!shouldSync) return;
+      this._scheduleRevealDiscovery();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-liquid-reveal"],
+    });
+    this._revealObserver = observer;
+  }
+
+  private _scheduleRevealDiscovery(): void {
+    if (this._revealDiscoveryScheduled || this._destroyed) return;
+    this._revealDiscoveryScheduled = true;
+    const run = () => {
+      this._revealDiscoveryScheduled = false;
+      if (this._destroyed) return;
+      discoverReveals(this);
+      triggerRevealCaptures(this);
+      this.requestRender();
+    };
+    if (typeof requestAnimationFrame !== "undefined") {
+      requestAnimationFrame(run);
+    } else {
+      setTimeout(run, 0);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -705,6 +801,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
     }
     destroyBlurPyramid(this);
     destroyComposeFbo(this);
+    destroyRevealResources(this);
+    if (this._revealObserver) {
+      this._revealObserver.disconnect();
+      this._revealObserver = null;
+    }
     if (this._lensContentTex) {
       this.gl.deleteTexture(this._lensContentTex);
       this._lensContentTex = null;

@@ -2,6 +2,10 @@ import html2canvas from "html2canvas-pro";
 import type { AqualensRenderer } from "./renderer";
 import { ensureBlurPyramid } from "./renderer-fbo";
 import { discoverAndAddFixedElements } from "./renderer-dynamic";
+import {
+  discoverReveals,
+  triggerRevealCaptures,
+} from "./renderer-reveal";
 
 export function resizeCanvas(renderer: AqualensRenderer): void {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -210,12 +214,6 @@ export async function captureSnapshotImpl(
         scrollY: 0,
         scale: scale,
         ignoreElements: ignoreElementsFunc,
-        onclone(clonedDoc: Document) {
-          clonedDoc.documentElement.setAttribute(
-            "data-liquid-snapshot",
-            "true",
-          );
-        },
       });
 
       uploadTexture(renderer, snapCanvas);
@@ -281,6 +279,14 @@ function uploadTexture(
       setTimeout(() => discoverAndAddFixedElements(renderer), 0);
     }
   }
+
+  discoverReveals(renderer);
+  for (const reveal of renderer._revealNodes) {
+    reveal.needsRecapture = true;
+    reveal.capture = null;
+  }
+  triggerRevealCaptures(renderer);
+
   renderer.render();
 
   if (renderer._pendingActivation.length) {
