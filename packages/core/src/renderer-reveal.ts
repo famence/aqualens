@@ -97,7 +97,7 @@ export function triggerRevealCaptures(renderer: AqualensRenderer): void {
         liquidStyles?.remove();
         const override = clonedDoc.createElement("style");
         override.textContent =
-          "html [data-liquid-reveal]{opacity:1 !important;visibility:visible !important;display:revert !important;}";
+          "html [data-liquid-reveal]{opacity:1 !important;pointer-events:auto !important;display:revert !important;}";
         clonedDoc.head.appendChild(override);
       },
     })

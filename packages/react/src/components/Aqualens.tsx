@@ -306,10 +306,10 @@ const AqualensInner = <C extends React.ElementType = "div">(
     };
   }, [hasChildren, powerSave]);
 
-    const mergedStyle = useMemo<CSSProperties>(
-      () => ({ position: "relative" as const, ...style }),
-      [style],
-    );
+  const mergedStyle = useMemo<CSSProperties>(
+    () => ({ position: "relative" as const, ...style }),
+    [style],
+  );
 
   const Component = (Tag ?? "div") as React.ElementType;
 

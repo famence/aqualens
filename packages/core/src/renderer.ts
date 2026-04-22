@@ -57,10 +57,24 @@ import {
   type RevealMeta,
 } from "./renderer-reveal";
 
+// NOTE: we intentionally avoid `visibility: hidden` here.
+// html2canvas-pro serializes SVG descendants via XMLSerializer into a
+// `data:image/svg+xml,...` URL and renders them as standalone images, so any
+// CSS rule from the cloned document does NOT apply to those SVGs — only inline
+// styles copied onto the SVG clone do. Because `copyCSSStyles` inlines the full
+// computed style of every SVG clone BEFORE onclone runs, and `visibility`
+// inherits, a `visibility: hidden` on the reveal container bakes `visibility:
+// hidden` as an inline attribute on every SVG descendant, making them render
+// invisibly inside the reveal capture.
+// `opacity` is not inherited in the CSS sense (each element computes its own),
+// so children end up with `opacity: 1` in their computed style, which is safe
+// to inline. Visually, the parent's `opacity: 0` still cascades through
+// compositing to hide the whole subtree on the live page, and
+// `pointer-events: none` prevents interaction (inherited by children).
 const DYNAMIC_STYLES_CSS = `
 html:not([data-liquid-power-save="true"]) [data-liquid-reveal] {
   opacity: 0 !important;
-  visibility: hidden !important;
+  pointer-events: none !important;
 }
 `;
 
