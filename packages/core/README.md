@@ -92,6 +92,37 @@ renderer.addDynamicElement(movingNode);
 // or multiple / selector string overloads
 ```
 
+## Reveal overlays (`data-liquid-reveal-*`)
+
+The renderer supports a reveal layer API for "Apple Music style" tab indicators and similar UI, where alternate content is shown only when a lens with a high-enough stacking index is present.
+
+- `data-liquid-reveal-index="{number}"` — required; threshold value used by the renderer to decide whether the reveal is eligible for a lens/group.
+- `data-liquid-reveal-mode="under-lens" | "on-lens"` — optional; default is `under-lens`.
+
+```html
+<!-- Base label (normal content) -->
+<div class="tab-label">Genres</div>
+
+<!-- Reveal label (alternate colored content) -->
+<div
+  data-liquid-reveal-index="11"
+  data-liquid-reveal-mode="on-lens"
+  class="tab-label tab-label--accent"
+>
+  Genres
+</div>
+```
+
+Mode behavior:
+
+- `under-lens`: reveal content is composited into the source texture before the glass render pass, so it appears below the lens tint.
+- `on-lens`: reveal content is drawn after the lens render pass, clipped by the lens SDF, so it appears above the dark tint while still living inside the lens silhouette.
+- `on-lens` keeps refraction enabled: displacement and chromatic dispersion are driven by the owning lens's `refraction.thickness`, `refraction.factor`, and `refraction.dispersion`.
+
+Migration note:
+
+- Rename legacy `data-liquid-reveal` to `data-liquid-reveal-index`.
+
 ## Power-save mode (lighter GPU path)
 
 For a CSS/SVG-style fallback with reduced GPU work, the package exposes `PowerSaveRenderer`, `PowerSaveLens`, and `getSharedPowerSaveRenderer()`. Wire them the same way as your UI strategy (see the React package’s `powerSave` prop for reference).

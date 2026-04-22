@@ -116,6 +116,27 @@ For advanced usage you can import from `@aqualens/react` or `@aqualens/core` int
 
 `AqualensRenderer`, `getSharedRenderer`, `updateSharedRendererConfig`, `setOpaqueOverlap`, `DEFAULT_OPTIONS`, and the main TypeScript types.
 
+## Reveal attributes in React markup
+
+Reveal overlays are configured via DOM attributes on regular children:
+
+```tsx
+<Aqualens className="indicator" style={{ zIndex: 10 }}>
+  <span
+    data-liquid-reveal-index={11}
+    data-liquid-reveal-mode="on-lens"
+    className="text-red-500"
+  >
+    Genres
+  </span>
+</Aqualens>
+```
+
+- Use `data-liquid-reveal-index` (number) instead of the legacy `data-liquid-reveal`.
+- `data-liquid-reveal-mode` is optional:
+  - `under-lens` (default): reveal appears below lens tint.
+  - `on-lens`: reveal appears above tint, clipped to lens shape, with lens refraction/dispersion preserved.
+
 ## Example project
 
 The interactive demo runs at **[famence.github.io/aqualens](https://famence.github.io/aqualens/)**.  
