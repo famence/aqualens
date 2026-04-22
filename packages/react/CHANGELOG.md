@@ -1,5 +1,16 @@
 # @aqualens/react
 
+## 2.2.0
+
+### Minor Changes
+
+- [`c0a8433`](https://github.com/famence/aqualens/commit/c0a84339ec56defa838e44e548577972478eee52) Thanks [@famence](https://github.com/famence)! - improved data-liquid-reveal functionality
+
+### Patch Changes
+
+- Updated dependencies [[`c0a8433`](https://github.com/famence/aqualens/commit/c0a84339ec56defa838e44e548577972478eee52), [`5363d23`](https://github.com/famence/aqualens/commit/5363d23b2f2f66e0cc6b8723642f686faa24d483)]:
+  - @aqualens/core@2.2.0
+
 ## 2.1.0
 
 ### Minor Changes
