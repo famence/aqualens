@@ -1,5 +1,16 @@
 # @aqualens/react
 
+## 2.1.0
+
+### Minor Changes
+
+- [`4d2a696`](https://github.com/famence/aqualens/commit/4d2a6960ce5ffcc208126eaaf63ecab5c6d29a68) Thanks [@famence](https://github.com/famence)! - data-liquid-reveal is a type of number now for cascading lenses
+
+### Patch Changes
+
+- Updated dependencies [[`4d2a696`](https://github.com/famence/aqualens/commit/4d2a6960ce5ffcc208126eaaf63ecab5c6d29a68)]:
+  - @aqualens/core@2.1.0
+
 ## 2.0.0
 
 ### Major Changes
