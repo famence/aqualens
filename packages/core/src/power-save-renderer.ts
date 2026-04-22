@@ -56,17 +56,7 @@ export class PowerSaveLens implements AqualensLensInstance {
 
   constructor(element: HTMLElement, options: AqualensConfig) {
     this.element = element;
-
-    const bgCol = window.getComputedStyle(element).backgroundColor;
-    const parsed = parseBgColorToRgba(bgCol);
-    if (parsed) {
-      const { r, g, b, a } = parsed;
-      this._bgColorComponents = { r, g, b, a };
-      this.options = { ...options, tint: { r, g, b, a } };
-    } else {
-      this._bgColorComponents = null;
-      this.options = { ...options, tint: DEFAULT_TINT };
-    }
+    this.options = { ...options, tint: DEFAULT_TINT };
 
     this._origBackdropFilter = element.style.backdropFilter || "";
     this._origWebkitBackdropFilter =
@@ -77,6 +67,8 @@ export class PowerSaveLens implements AqualensLensInstance {
     element.style.setProperty("background-color", "transparent", "important");
     element.style.setProperty("background-image", "none", "important");
     element.style.setProperty("background", "transparent", "important");
+
+    this._updateTintFromCss();
 
     this._applyElementStyles();
     this._buildOverlays();
@@ -99,10 +91,49 @@ export class PowerSaveLens implements AqualensLensInstance {
 
   _syncStyles(): void {
     if (this._destroyed) return;
+    this._updateTintFromCss();
     this._applyElementStyles();
     this._applyTint();
     this._applyGlare();
     this._applyFresnel();
+  }
+
+  /**
+   * Re-read the element's background-color from CSS. We set inline
+   * `background-color`, `background` and `background-image` as `!important`
+   * overrides, so we must drop them temporarily to see the actual CSS value
+   * (e.g. after a class toggle that changed the tint).
+   */
+  private _updateTintFromCss(): void {
+    const elementStyle = this.element.style;
+    const hadBgColorOverride =
+      elementStyle.getPropertyValue("background-color") !== "";
+    const hadBgOverride = elementStyle.getPropertyValue("background") !== "";
+    const hadBgImageOverride =
+      elementStyle.getPropertyValue("background-image") !== "";
+
+    if (hadBgColorOverride) elementStyle.removeProperty("background-color");
+    if (hadBgOverride) elementStyle.removeProperty("background");
+    if (hadBgImageOverride) elementStyle.removeProperty("background-image");
+
+    const bgCol = window.getComputedStyle(this.element).backgroundColor;
+
+    if (hadBgColorOverride)
+      elementStyle.setProperty("background-color", "transparent", "important");
+    if (hadBgImageOverride)
+      elementStyle.setProperty("background-image", "none", "important");
+    if (hadBgOverride)
+      elementStyle.setProperty("background", "transparent", "important");
+
+    const parsed = parseBgColorToRgba(bgCol);
+    if (parsed) {
+      const { r, g, b, a } = parsed;
+      this._bgColorComponents = { r, g, b, a };
+      this.options.tint = { r, g, b, a };
+    } else {
+      this._bgColorComponents = null;
+      this.options.tint = DEFAULT_TINT;
+    }
   }
 
   destroy(): void {

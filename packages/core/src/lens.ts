@@ -71,16 +71,6 @@ export class AqualensLens implements AqualensLensInstance {
       this.element.style.position = "relative";
     }
 
-    const bgCol = window.getComputedStyle(this.element).backgroundColor;
-    const parsed = parseBgColorToRgba(bgCol);
-    if (parsed) {
-      const { r, g, b, a } = parsed;
-      this._bgColorComponents = { r, g, b, a };
-      this.options.tint = { r, g, b, a };
-    } else {
-      this._bgColorComponents = null;
-      this.options.tint = DEFAULT_TINT;
-    }
     const boxShadow = window.getComputedStyle(this.element).boxShadow;
     this.shadowParams = parseBoxShadow(boxShadow);
     this.element.style.setProperty("box-shadow", "none", "important");
@@ -100,6 +90,8 @@ export class AqualensLens implements AqualensLensInstance {
     );
     this.element.style.setProperty("background-image", "none", "important");
     this.element.style.setProperty("background", "transparent", "important");
+
+    this._updateTintFromCss();
 
     this.updateMetrics();
 
@@ -251,6 +243,9 @@ export class AqualensLens implements AqualensLensInstance {
     if (!this._styleMetricsDirty) return;
 
     this._styleMetricsDirty = false;
+
+    this._updateTintFromCss();
+
     const style = window.getComputedStyle(this.element);
     const rootStyle = window.getComputedStyle(document.documentElement);
     const emBase =
@@ -294,6 +289,45 @@ export class AqualensLens implements AqualensLensInstance {
   invalidateStyleMetrics(): void {
     this._styleMetricsDirty = true;
     this._rectDirty = true;
+  }
+
+  /**
+   * Re-read the element's background-color from CSS and sync it into
+   * `options.tint` / `_bgColorComponents`. We set `background-color`,
+   * `background` and `background-image` as inline `!important` overrides, so we
+   * must temporarily drop them to let `getComputedStyle` return the real CSS
+   * value (e.g. from a class that was just toggled).
+   */
+  private _updateTintFromCss(): void {
+    const elementStyle = this.element.style;
+    const hadBgColorOverride =
+      elementStyle.getPropertyValue("background-color") !== "";
+    const hadBgOverride = elementStyle.getPropertyValue("background") !== "";
+    const hadBgImageOverride =
+      elementStyle.getPropertyValue("background-image") !== "";
+
+    if (hadBgColorOverride) elementStyle.removeProperty("background-color");
+    if (hadBgOverride) elementStyle.removeProperty("background");
+    if (hadBgImageOverride) elementStyle.removeProperty("background-image");
+
+    const bgCol = window.getComputedStyle(this.element).backgroundColor;
+
+    if (hadBgColorOverride)
+      elementStyle.setProperty("background-color", "transparent", "important");
+    if (hadBgImageOverride)
+      elementStyle.setProperty("background-image", "none", "important");
+    if (hadBgOverride)
+      elementStyle.setProperty("background", "transparent", "important");
+
+    const parsed = parseBgColorToRgba(bgCol);
+    if (parsed) {
+      const { r, g, b, a } = parsed;
+      this._bgColorComponents = { r, g, b, a };
+      this.options.tint = { r, g, b, a };
+    } else {
+      this._bgColorComponents = null;
+      this.options.tint = DEFAULT_TINT;
+    }
   }
 
   getEffectiveZ(): number {
