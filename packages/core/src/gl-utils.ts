@@ -107,6 +107,22 @@ export interface MaskUniforms {
   shapes: WebGLUniformLocation | null;
 }
 
+export interface RevealMaskedUniforms {
+  resolution: WebGLUniformLocation | null;
+  dpr: WebGLUniformLocation | null;
+  radius: WebGLUniformLocation | null;
+  radiusCorners: WebGLUniformLocation | null;
+  shapeCount: WebGLUniformLocation | null;
+  mergeK: WebGLUniformLocation | null;
+  shapes: WebGLUniformLocation | null;
+  reveal: WebGLUniformLocation | null;
+  revealRegion: WebGLUniformLocation | null;
+  revealRect: WebGLUniformLocation | null;
+  refThickness: WebGLUniformLocation | null;
+  refFactor: WebGLUniformLocation | null;
+  refDispersion: WebGLUniformLocation | null;
+}
+
 export interface MainUniforms {
   tex: WebGLUniformLocation | null;
   blurredTex: WebGLUniformLocation | null;

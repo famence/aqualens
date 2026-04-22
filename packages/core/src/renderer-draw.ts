@@ -3,6 +3,163 @@ import type { AqualensLens } from "./lens";
 
 export const MAX_SHAPES = 8;
 
+export const MERGE_RADIUS_CSS = 30;
+
+/** Viewport geometry used by the lens-render passes (and reveal-on-lens). */
+export interface LensViewport {
+  /** Viewport rect in canvas/framebuffer pixels (origin bottom-left). */
+  viewportX: number;
+  viewportY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  /** CSS-pixel position of the viewport's top-left corner on the page. */
+  viewportLeft: number;
+  viewportTop: number;
+  viewportWidthPx: number;
+  viewportHeightPx: number;
+}
+
+export function computeLensShadowPad(lens: AqualensLens): number {
+  const shadow = lens.shadowParams;
+  if (!shadow || shadow.color.a <= 0) return 0;
+  return (
+    Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)) +
+    shadow.blur +
+    Math.abs(shadow.spread) +
+    5
+  );
+}
+
+/**
+ * Compute the viewport the main/mask shaders use to render a single lens.
+ * Returns null when the lens has no rect yet or is too small to paint.
+ */
+export function computeSingleLensViewport(
+  lens: AqualensLens,
+  dpr: number,
+  overscrollX: number,
+  overscrollY: number,
+  canvasHeight: number,
+): { viewport: LensViewport; shadowPad: number } | null {
+  const rect = lens.rectPx;
+  if (!rect) return null;
+
+  const shadowPad = computeLensShadowPad(lens);
+  const viewportLeft = rect.left - shadowPad;
+  const viewportTop = rect.top - shadowPad;
+  const viewportWidthPx = rect.width + 2 * shadowPad;
+  const viewportHeightPx = rect.height + 2 * shadowPad;
+
+  const viewportX = Math.round((viewportLeft + overscrollX) * dpr);
+  const viewportY = Math.round(
+    canvasHeight - (viewportTop + overscrollY + viewportHeightPx) * dpr,
+  );
+  const viewportWidth = Math.ceil(viewportWidthPx * dpr);
+  const viewportHeight = Math.ceil(viewportHeightPx * dpr);
+  if (viewportWidth < 2 || viewportHeight < 2) return null;
+
+  return {
+    viewport: {
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+      viewportLeft,
+      viewportTop,
+      viewportWidthPx,
+      viewportHeightPx,
+    },
+    shadowPad,
+  };
+}
+
+/** Result of laying out a merged-group viewport (see `renderMergedGroup`). */
+export interface MergedGroupLayout {
+  viewport: LensViewport;
+  /** Page-pixel-space left/top of the padded union bounding box. */
+  unionLeft: number;
+  unionTop: number;
+  unionWidth: number;
+  unionHeight: number;
+  /** Page-pixel-space bottom edge of the padded union (used for shape y). */
+  unionBottom: number;
+  /** Max per-lens shadow padding inside the group. */
+  shadowPad: number;
+  /** Actual CSS-pixel padding applied around the bounding box. */
+  padding: number;
+  /** Smoothness factor used for smin-merging multiple shapes. */
+  mergeSmoothness: number;
+}
+
+/**
+ * Compute the union bounding-box viewport used by `renderMergedGroup` for a
+ * set of lenses. Returns null when the group is entirely empty / off-screen.
+ */
+export function computeMergedGroupLayout(
+  lenses: AqualensLens[],
+  dpr: number,
+  overscrollX: number,
+  overscrollY: number,
+  canvasHeight: number,
+): MergedGroupLayout | null {
+  let unionLeft = Infinity;
+  let unionTop = Infinity;
+  let unionRight = -Infinity;
+  let unionBottom = -Infinity;
+  for (const lens of lenses) {
+    const rect = lens.rectPx;
+    if (!rect || rect.width < 2 || rect.height < 2) continue;
+    unionLeft = Math.min(unionLeft, rect.left);
+    unionTop = Math.min(unionTop, rect.top);
+    unionRight = Math.max(unionRight, rect.left + rect.width);
+    unionBottom = Math.max(unionBottom, rect.top + rect.height);
+  }
+  if (!isFinite(unionLeft)) return null;
+
+  let maxShadowPad = 0;
+  for (const lens of lenses) {
+    maxShadowPad = Math.max(maxShadowPad, computeLensShadowPad(lens));
+  }
+  const shadowPad = maxShadowPad;
+  const padding = Math.max(MERGE_RADIUS_CSS + 10, shadowPad);
+  unionLeft -= padding;
+  unionTop -= padding;
+  unionRight += padding;
+  unionBottom += padding;
+
+  const unionWidth = unionRight - unionLeft;
+  const unionHeight = unionBottom - unionTop;
+
+  const viewportX = Math.round((unionLeft + overscrollX) * dpr);
+  const viewportY = Math.round(
+    canvasHeight - (unionTop + overscrollY + unionHeight) * dpr,
+  );
+  const viewportWidth = Math.ceil(unionWidth * dpr);
+  const viewportHeight = Math.ceil(unionHeight * dpr);
+  if (viewportWidth < 2 || viewportHeight < 2) return null;
+
+  return {
+    viewport: {
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+      viewportLeft: unionLeft,
+      viewportTop: unionTop,
+      viewportWidthPx: unionWidth,
+      viewportHeightPx: unionHeight,
+    },
+    unionLeft,
+    unionTop,
+    unionWidth,
+    unionHeight,
+    unionBottom,
+    shadowPad,
+    padding,
+    mergeSmoothness: MERGE_RADIUS_CSS / unionHeight,
+  };
+}
+
 function setMainViewportAndBounds(
   renderer: AqualensRenderer,
   viewportX: number,
@@ -164,28 +321,26 @@ export function renderLens(
   const rect = lens.rectPx;
   if (!rect) return;
 
-  const shadow = lens.shadowParams;
-  const hasShadow = shadow != null && shadow.color.a > 0;
-  const shadowPad = hasShadow
-    ? Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)) +
-      shadow.blur +
-      Math.abs(shadow.spread) +
-      5
-    : 0;
-
-  const viewportLeft = rect.left - shadowPad;
-  const viewportTop = rect.top - shadowPad;
-  const viewportWidthPx = rect.width + 2 * shadowPad;
-  const viewportHeightPx = rect.height + 2 * shadowPad;
-
-  const viewportX = Math.round((viewportLeft + overscrollX) * dpr);
-  const viewportY = Math.round(
-    renderer.canvas.height -
-      (viewportTop + overscrollY + viewportHeightPx) * dpr,
+  const viewportData = computeSingleLensViewport(
+    lens,
+    dpr,
+    overscrollX,
+    overscrollY,
+    renderer.canvas.height,
   );
-  const viewportWidth = Math.ceil(viewportWidthPx * dpr);
-  const viewportHeight = Math.ceil(viewportHeightPx * dpr);
-  if (viewportWidth < 2 || viewportHeight < 2) return;
+  if (!viewportData) return;
+  const { viewport, shadowPad } = viewportData;
+  const hasShadow = shadowPad > 0;
+  const {
+    viewportX,
+    viewportY,
+    viewportWidth,
+    viewportHeight,
+    viewportLeft,
+    viewportTop,
+    viewportWidthPx,
+    viewportHeightPx,
+  } = viewport;
 
   setMainViewportAndBounds(
     renderer,
@@ -296,28 +451,22 @@ export function renderGroupMask(
     const rect = lens.rectPx;
     if (!rect) return;
 
-    const shadow = lens.shadowParams;
-    const hasShadow = shadow != null && shadow.color.a > 0;
-    const shadowPad = hasShadow
-      ? Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)) +
-        shadow.blur +
-        Math.abs(shadow.spread) +
-        5
-      : 0;
-
-    const viewportLeft = rect.left - shadowPad;
-    const viewportTop = rect.top - shadowPad;
-    const viewportWidthPx = rect.width + 2 * shadowPad;
-    const viewportHeightPx = rect.height + 2 * shadowPad;
-
-    const viewportX = Math.round((viewportLeft + overscrollX) * dpr);
-    const viewportY = Math.round(
-      renderer.canvas.height -
-        (viewportTop + overscrollY + viewportHeightPx) * dpr,
+    const viewportData = computeSingleLensViewport(
+      lens,
+      dpr,
+      overscrollX,
+      overscrollY,
+      renderer.canvas.height,
     );
-    const viewportWidth = Math.ceil(viewportWidthPx * dpr);
-    const viewportHeight = Math.ceil(viewportHeightPx * dpr);
-    if (viewportWidth < 2 || viewportHeight < 2) return;
+    if (!viewportData) return;
+    const { viewport, shadowPad } = viewportData;
+    const hasShadow = shadowPad > 0;
+    const {
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+    } = viewport;
 
     setMaskViewport(
       renderer,
@@ -364,54 +513,25 @@ export function renderGroupMask(
     return;
   }
 
-  let unionLeft = Infinity;
-  let unionTop = Infinity;
-  let unionRight = -Infinity;
-  let unionBottom = -Infinity;
-  for (const lens of lenses) {
-    const rect = lens.rectPx;
-    if (!rect || rect.width < 2 || rect.height < 2) continue;
-    unionLeft = Math.min(unionLeft, rect.left);
-    unionTop = Math.min(unionTop, rect.top);
-    unionRight = Math.max(unionRight, rect.left + rect.width);
-    unionBottom = Math.max(unionBottom, rect.top + rect.height);
-  }
-  if (!isFinite(unionLeft)) return;
-
-  let maxShadowPad = 0;
-  for (const lens of lenses) {
-    const shadowParams = lens.shadowParams;
-    if (shadowParams && shadowParams.color.a > 0) {
-      const lensShadowPadding =
-        Math.max(
-          Math.abs(shadowParams.offsetX),
-          Math.abs(shadowParams.offsetY),
-        ) +
-        shadowParams.blur +
-        Math.abs(shadowParams.spread) +
-        5;
-      maxShadowPad = Math.max(maxShadowPad, lensShadowPadding);
-    }
-  }
-  const shadowPad = maxShadowPad;
-
-  const MERGE_RADIUS_CSS = 30;
-  const padding = Math.max(MERGE_RADIUS_CSS + 10, shadowPad);
-  unionLeft -= padding;
-  unionTop -= padding;
-  unionRight += padding;
-  unionBottom += padding;
-
-  const unionWidth = unionRight - unionLeft;
-  const unionHeight = unionBottom - unionTop;
-
-  const viewportX = Math.round((unionLeft + overscrollX) * dpr);
-  const viewportY = Math.round(
-    renderer.canvas.height - (unionTop + overscrollY + unionHeight) * dpr,
+  const layout = computeMergedGroupLayout(
+    lenses,
+    dpr,
+    overscrollX,
+    overscrollY,
+    renderer.canvas.height,
   );
-  const viewportWidth = Math.ceil(unionWidth * dpr);
-  const viewportHeight = Math.ceil(unionHeight * dpr);
-  if (viewportWidth < 2 || viewportHeight < 2) return;
+  if (!layout) return;
+  const {
+    viewport: {
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+    },
+    unionLeft,
+    unionBottom,
+    mergeSmoothness,
+  } = layout;
 
   setMaskViewport(
     renderer,
@@ -439,7 +559,6 @@ export function renderGroupMask(
   }
   gl.uniform4fv(renderer._maskU.shapes, shapeData);
 
-  const mergeSmoothness = MERGE_RADIUS_CSS / unionHeight;
   gl.uniform1i(renderer._maskU.shapeCount, lenses.length);
   gl.uniform1f(renderer._maskU.mergeK, mergeSmoothness);
 
@@ -484,54 +603,28 @@ export function renderMergedGroup(
     return;
   }
 
-  let unionLeft = Infinity;
-  let unionTop = Infinity;
-  let unionRight = -Infinity;
-  let unionBottom = -Infinity;
-  for (const lens of lenses) {
-    const rect = lens.rectPx;
-    if (!rect || rect.width < 2 || rect.height < 2) continue;
-    unionLeft = Math.min(unionLeft, rect.left);
-    unionTop = Math.min(unionTop, rect.top);
-    unionRight = Math.max(unionRight, rect.left + rect.width);
-    unionBottom = Math.max(unionBottom, rect.top + rect.height);
-  }
-  if (!isFinite(unionLeft)) return;
-
-  let maxShadowPad = 0;
-  for (const lens of lenses) {
-    const shadowParams = lens.shadowParams;
-    if (shadowParams && shadowParams.color.a > 0) {
-      const lensShadowPadding =
-        Math.max(
-          Math.abs(shadowParams.offsetX),
-          Math.abs(shadowParams.offsetY),
-        ) +
-        shadowParams.blur +
-        Math.abs(shadowParams.spread) +
-        5;
-      maxShadowPad = Math.max(maxShadowPad, lensShadowPadding);
-    }
-  }
-  const shadowPad = maxShadowPad;
-
-  const MERGE_RADIUS_CSS = 30;
-  const padding = Math.max(MERGE_RADIUS_CSS + 10, shadowPad);
-  unionLeft -= padding;
-  unionTop -= padding;
-  unionRight += padding;
-  unionBottom += padding;
-
-  const unionWidth = unionRight - unionLeft;
-  const unionHeight = unionBottom - unionTop;
-
-  const viewportX = Math.round((unionLeft + overscrollX) * dpr);
-  const viewportY = Math.round(
-    renderer.canvas.height - (unionTop + overscrollY + unionHeight) * dpr,
+  const layout = computeMergedGroupLayout(
+    lenses,
+    dpr,
+    overscrollX,
+    overscrollY,
+    renderer.canvas.height,
   );
-  const viewportWidth = Math.ceil(unionWidth * dpr);
-  const viewportHeight = Math.ceil(unionHeight * dpr);
-  if (viewportWidth < 2 || viewportHeight < 2) return;
+  if (!layout) return;
+  const {
+    viewport: {
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+    },
+    unionLeft,
+    unionTop,
+    unionWidth,
+    unionHeight,
+    unionBottom,
+    mergeSmoothness,
+  } = layout;
 
   setMainViewportAndBounds(
     renderer,
@@ -564,7 +657,6 @@ export function renderMergedGroup(
   }
   gl.uniform4fv(renderer._mainU.shapes, shapeData);
 
-  const mergeSmoothness = MERGE_RADIUS_CSS / unionHeight;
   gl.uniform1i(renderer._mainU.shapeCount, lenses.length);
   gl.uniform1f(renderer._mainU.mergeK, mergeSmoothness);
 

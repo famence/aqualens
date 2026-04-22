@@ -5,6 +5,7 @@ import {
   COMPOSITE_FRAGMENT,
   MAIN_FRAGMENT,
   MASK_FRAGMENT,
+  REVEAL_MASKED_FRAGMENT,
 } from "./shaders";
 import { debounce } from "./utils";
 import type { AqualensConfig, AqualensRendererInstance } from "./types";
@@ -16,6 +17,7 @@ import {
   type BlurPyramidLevel,
   type MainUniforms,
   type MaskUniforms,
+  type RevealMaskedUniforms,
 } from "./gl-utils";
 import {
   ensureBlurPyramid,
@@ -40,6 +42,8 @@ import {
   renderMergedGroup,
   renderGroupMask,
   MAX_SHAPES,
+  computeMergedGroupLayout,
+  computeSingleLensViewport,
 } from "./renderer-draw";
 import {
   updateDynamicVideos,
@@ -49,10 +53,16 @@ import {
   triggerLensContentCaptures,
 } from "./renderer-dynamic";
 import {
+  buildMergedGroupShapes,
+  buildSingleLensShape,
   compositeRevealsForStackingIndex,
+  compositeRevealsOnLensForGroup,
   destroyRevealResources,
   discoverReveals,
   hasEligibleReveals,
+  hasEligibleUnderLensReveals,
+  REVEAL_CSS_SELECTOR,
+  REVEAL_OBSERVED_ATTRS,
   triggerRevealCaptures,
   type RevealMeta,
 } from "./renderer-reveal";
@@ -72,7 +82,7 @@ import {
 // compositing to hide the whole subtree on the live page, and
 // `pointer-events: none` prevents interaction (inherited by children).
 const DYNAMIC_STYLES_CSS = `
-html:not([data-liquid-power-save="true"]) [data-liquid-reveal] {
+html:not([data-liquid-power-save="true"]) ${REVEAL_CSS_SELECTOR} {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -190,6 +200,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _revealUploadTexH = 0;
   _revealObserver: MutationObserver | null = null;
   _revealDiscoveryScheduled = false;
+  _revealMaskedProgram!: WebGLProgram;
+  _revealMaskedU!: RevealMaskedUniforms;
 
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
     this.canvas = document.createElement("canvas");
@@ -361,6 +373,51 @@ export class AqualensRenderer implements AqualensRendererInstance {
       srcRegion: gl.getUniformLocation(this._compositeProgram, "u_srcRegion"),
     };
 
+    this._revealMaskedProgram = createProgramGL2(
+      gl,
+      VERTEX_SHADER,
+      REVEAL_MASKED_FRAGMENT,
+    );
+    this._revealMaskedU = {
+      resolution: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_resolution",
+      ),
+      dpr: gl.getUniformLocation(this._revealMaskedProgram, "u_dpr"),
+      radius: gl.getUniformLocation(this._revealMaskedProgram, "u_radius"),
+      radiusCorners: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_radiusCorners",
+      ),
+      shapeCount: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_shapeCount",
+      ),
+      mergeK: gl.getUniformLocation(this._revealMaskedProgram, "u_mergeK"),
+      shapes: gl.getUniformLocation(this._revealMaskedProgram, "u_shapes"),
+      reveal: gl.getUniformLocation(this._revealMaskedProgram, "u_reveal"),
+      revealRegion: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_revealRegion",
+      ),
+      revealRect: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_revealRect",
+      ),
+      refThickness: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_refThickness",
+      ),
+      refFactor: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_refFactor",
+      ),
+      refDispersion: gl.getUniformLocation(
+        this._revealMaskedProgram,
+        "u_refDispersion",
+      ),
+    };
+
     const vertexArrayObject = gl.createVertexArray()!;
     gl.bindVertexArray(vertexArrayObject);
     const buffer = gl.createBuffer()!;
@@ -507,9 +564,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     const revealsActive = hasEligibleReveals(this);
     if (revealsActive) triggerRevealCaptures(this);
+    const underLensRevealsActive = hasEligibleUnderLensReveals(this);
 
     const cascadeActive = needCascade && !opaqueCascade;
-    const useCompose = cascadeActive || revealsActive;
+    const useCompose = cascadeActive || underLensRevealsActive;
     this._revealComposited.clear();
 
     if (useCompose) {
@@ -564,8 +622,12 @@ export class AqualensRenderer implements AqualensRendererInstance {
         this._activeSourceTex = this._composeTex;
       }
 
-      if (revealsActive && groupIdx >= implicitCount) {
-        const explicitKey = sortedExplicitKeys[groupIdx - implicitCount];
+      const explicitKey =
+        groupIdx >= implicitCount
+          ? sortedExplicitKeys[groupIdx - implicitCount]
+          : undefined;
+
+      if (underLensRevealsActive && explicitKey !== undefined) {
         const addedReveals = compositeRevealsForStackingIndex(
           this,
           explicitKey,
@@ -621,13 +683,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
       }
 
       if (needCascade && !opaqueCascade) {
-        renderLensContentOnCanvas(
-          this,
-          visible,
-          dpr,
-          overscrollX,
-          overscrollY,
-        );
+        renderLensContentOnCanvas(this, visible, dpr, overscrollX, overscrollY);
       }
 
       if (needCascade && !opaqueCascade && groupIdx < totalGroups - 1) {
@@ -636,10 +692,155 @@ export class AqualensRenderer implements AqualensRendererInstance {
           runKawaseBlur(this, this._composeTex);
         }
       }
+
+      // On-lens reveals: after the glass has been drawn (and, in cascade
+      // mode, after it has been flattened into compose for the next group),
+      // paint any eligible on-lens reveals directly on the default
+      // framebuffer, clipped by this group's SDF. Running AFTER the flatten
+      // keeps the on-lens overlay out of subsequent groups' source texture
+      // so it doesn't propagate through higher lenses.
+      if (revealsActive && explicitKey !== undefined && visible.length > 0) {
+        this._compositeOnLensRevealsForVisibleGroup(
+          visible,
+          explicitKey,
+          dpr,
+          overscrollX,
+          overscrollY,
+        );
+      }
     }
 
     this._activeSourceTex = null;
     gl.disable(gl.BLEND);
+  }
+
+  /**
+   * Shared entry point for `on-lens` reveal compositing: computes the same
+   * viewport / SDF shape data the main lens render pass used, then delegates
+   * to {@link compositeRevealsOnLensForGroup}.
+   */
+  private _compositeOnLensRevealsForVisibleGroup(
+    visible: AqualensLens[],
+    stackingIndex: number,
+    dpr: number,
+    overscrollX: number,
+    overscrollY: number,
+  ): void {
+    // Early-out: no on-lens reveals reachable at this stacking index.
+    let anyOnLens = false;
+    for (const reveal of this._revealNodes) {
+      if (reveal.mode !== "on-lens") continue;
+      if (reveal.revealValue > stackingIndex) continue;
+      if (!reveal.capture) continue;
+      anyOnLens = true;
+      break;
+    }
+    if (!anyOnLens) return;
+
+    if (visible.length === 1) {
+      const lens = visible[0];
+      const viewportData = computeSingleLensViewport(
+        lens,
+        dpr,
+        overscrollX,
+        overscrollY,
+        this.canvas.height,
+      );
+      if (!viewportData) return;
+      const { viewport, shadowPad } = viewportData;
+      const shape = buildSingleLensShape(lens, dpr, shadowPad);
+      if (!shape) return;
+      compositeRevealsOnLensForGroup(
+        this,
+        stackingIndex,
+        [shape],
+        0,
+        lens.options.refraction,
+        viewport.viewportX,
+        viewport.viewportY,
+        viewport.viewportWidth,
+        viewport.viewportHeight,
+        viewport.viewportLeft,
+        viewport.viewportTop,
+        viewport.viewportWidthPx,
+        viewport.viewportHeightPx,
+        dpr,
+      );
+      return;
+    }
+
+    // Merged group viewport (matches renderMergedGroup). For > MAX_SHAPES
+    // lenses renderMergedGroup splits into smaller batches; we mirror that
+    // here to keep the SDF shape set consistent with what was drawn.
+    const chunkSize = MAX_SHAPES;
+    let offset = 0;
+    while (offset < visible.length) {
+      const chunk = visible.slice(offset, offset + chunkSize);
+      offset += chunkSize;
+      if (chunk.length === 1) {
+        const viewportData = computeSingleLensViewport(
+          chunk[0],
+          dpr,
+          overscrollX,
+          overscrollY,
+          this.canvas.height,
+        );
+        if (!viewportData) continue;
+        const { viewport, shadowPad } = viewportData;
+        const shape = buildSingleLensShape(chunk[0], dpr, shadowPad);
+        if (!shape) continue;
+        compositeRevealsOnLensForGroup(
+          this,
+          stackingIndex,
+          [shape],
+          0,
+          chunk[0].options.refraction,
+          viewport.viewportX,
+          viewport.viewportY,
+          viewport.viewportWidth,
+          viewport.viewportHeight,
+          viewport.viewportLeft,
+          viewport.viewportTop,
+          viewport.viewportWidthPx,
+          viewport.viewportHeightPx,
+          dpr,
+        );
+        continue;
+      }
+      const layout = computeMergedGroupLayout(
+        chunk,
+        dpr,
+        overscrollX,
+        overscrollY,
+        this.canvas.height,
+      );
+      if (!layout) continue;
+      const shapes = buildMergedGroupShapes(
+        chunk,
+        dpr,
+        layout.unionLeft,
+        layout.unionBottom,
+      );
+      // Merged group: take refraction params from the first lens in the
+      // chunk. See RevealRefraction's doc-comment for why we don't try to
+      // blend them per-shape.
+      compositeRevealsOnLensForGroup(
+        this,
+        stackingIndex,
+        shapes,
+        layout.mergeSmoothness,
+        chunk[0].options.refraction,
+        layout.viewport.viewportX,
+        layout.viewport.viewportY,
+        layout.viewport.viewportWidth,
+        layout.viewport.viewportHeight,
+        layout.viewport.viewportLeft,
+        layout.viewport.viewportTop,
+        layout.viewport.viewportWidthPx,
+        layout.viewport.viewportHeightPx,
+        dpr,
+      );
+    }
   }
 
   private _installRevealObserver(): void {
@@ -657,7 +858,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
           }
         } else if (
           mutation.type === "attributes" &&
-          mutation.attributeName === "data-liquid-reveal"
+          mutation.attributeName !== null &&
+          REVEAL_OBSERVED_ATTRS.includes(mutation.attributeName)
         ) {
           shouldSync = true;
           break;
@@ -670,7 +872,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-liquid-reveal"],
+      attributeFilter: [...REVEAL_OBSERVED_ATTRS],
     });
     this._revealObserver = observer;
   }

@@ -125,6 +125,209 @@ void main() {
   fragColor = vec4(0.0, 0.0, 0.0, a);
 }`;
 
+/**
+ * Samples a reveal-element capture and outputs it clipped by the lens group's
+ * SDF shape. Used to paint `data-liquid-reveal-mode="on-lens"` reveals on top
+ * of the already-rendered lens so the reveal content appears INSIDE the glass.
+ *
+ * The shader runs in the same viewport as the lens render pass and therefore
+ * shares the same SDF uniform layout. `u_revealRect` is the reveal element's
+ * bounding box expressed in the same local-pixel space as the SDF (origin at
+ * the bottom-left of the viewport, y increasing upward). The reveal texture
+ * is uploaded without UNPACK_FLIP_Y, so we flip y when sampling.
+ *
+ * The refraction block mirrors MAIN_FRAGMENT so the reveal distorts at the
+ * glass edges the same way the background behind the lens does — making the
+ * reveal look like it lives "inside" the lens instead of being a flat decal.
+ * Refraction offsets are computed in "lens-viewport fractions" (to match
+ * MAIN's `offLens`) and then rescaled into reveal-rect UV fractions via the
+ * viewport/reveal-rect size ratio, so the distortion magnitude is consistent
+ * regardless of how large the reveal element is relative to the lens.
+ */
+export const REVEAL_MASKED_FRAGMENT = `#version 300 es
+precision highp float;
+
+const float N_R = 0.98;
+const float N_B = 1.02;
+
+in vec2 v_uv;
+
+uniform vec2 u_resolution;
+uniform float u_dpr;
+uniform float u_radius;
+uniform vec4 u_radiusCorners;
+
+#define MAX_MERGE_SHAPES 8
+uniform int u_shapeCount;
+uniform float u_mergeK;
+uniform vec4 u_shapes[MAX_MERGE_SHAPES * 2];
+
+uniform sampler2D u_reveal;
+uniform vec2 u_revealRegion;
+uniform vec4 u_revealRect;
+
+uniform float u_refThickness;
+uniform float u_refFactor;
+uniform float u_refDispersion;
+
+out vec4 fragColor;
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+  return mix(a, b, h) - k * h * (1.0 - h);
+}
+
+float sdRoundBoxPerCorner(vec2 p, vec2 b, vec4 corners) {
+  vec4 r = vec4(corners.y, corners.z, corners.x, corners.w);
+  r.xy = (p.x > 0.0) ? r.xy : r.zw;
+  float radius = (p.y > 0.0) ? r.x : r.y;
+  vec2 q = abs(p) - b + radius;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+float sdfShape(vec2 fc, int idx) {
+  vec4 posSize = u_shapes[idx * 2];
+  vec4 corners = u_shapes[idx * 2 + 1];
+  vec2 center = posSize.xy;
+  vec2 halfSize = posSize.zw;
+  vec2 p = (fc - center) / u_resolution.y;
+  vec2 hs = halfSize / u_resolution.y;
+  float maxAllowed = min(hs.x, hs.y);
+  vec4 r = clamp(corners / u_resolution.y, 0.0, maxAllowed);
+  return sdRoundBoxPerCorner(p, hs, r);
+}
+
+float mainSDF(vec2 fc) {
+  if (u_shapeCount >= 1) {
+    float d = sdfShape(fc, 0);
+    for (int i = 1; i < MAX_MERGE_SHAPES; i++) {
+      if (i >= u_shapeCount) break;
+      d = smin(d, sdfShape(fc, i), u_mergeK);
+    }
+    return d;
+  }
+  vec2 p = fc / u_resolution.y;
+  vec2 c = u_resolution.xy * 0.5 / u_resolution.y;
+  vec2 hs = u_resolution.xy * 0.5 / u_resolution.y;
+  vec4 corners = u_radiusCorners;
+  if (dot(corners, vec4(1.0)) <= 0.0) {
+    corners = vec4(u_radius);
+  }
+  float maxAllowed = min(hs.x, hs.y);
+  vec4 r = clamp(corners / u_resolution.y, 0.0, maxAllowed);
+  return sdRoundBoxPerCorner(p - c, hs, r);
+}
+
+vec2 getNormal(vec2 fc) {
+  if (u_shapeCount <= 1) {
+    vec2 p, hs;
+    vec4 corners;
+    if (u_shapeCount == 1) {
+      vec4 posSize = u_shapes[0];
+      corners = u_shapes[1];
+      p = (fc - posSize.xy) / u_resolution.y;
+      hs = posSize.zw / u_resolution.y;
+    } else {
+      p = fc / u_resolution.y - u_resolution.xy * 0.5 / u_resolution.y;
+      hs = u_resolution.xy * 0.5 / u_resolution.y;
+      corners = u_radiusCorners;
+      if (dot(corners, vec4(1.0)) <= 0.0) corners = vec4(u_radius);
+    }
+    float maxR = min(hs.x, hs.y);
+    vec4 r4 = clamp(corners / u_resolution.y, 0.0, maxR);
+    vec4 rr = vec4(r4.y, r4.z, r4.x, r4.w);
+    rr.xy = (p.x > 0.0) ? rr.xy : rr.zw;
+    float radius = (p.y > 0.0) ? rr.x : rr.y;
+    vec2 q = abs(p) - hs + radius;
+    vec2 qc = max(q, 0.0);
+    float lenQ = length(qc);
+    vec2 grad;
+    if (lenQ > 0.0001) {
+      grad = qc / lenQ;
+    } else {
+      grad = (q.x > q.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    }
+    grad *= sign(p);
+    return grad * (1414.213562 / u_resolution.y);
+  }
+  vec2 h = vec2(max(abs(dFdx(fc.x)), 0.0001), max(abs(dFdy(fc.y)), 0.0001));
+  vec2 g = vec2(
+    mainSDF(fc + vec2(h.x, 0.0)) - mainSDF(fc - vec2(h.x, 0.0)),
+    mainSDF(fc + vec2(0.0, h.y)) - mainSDF(fc - vec2(0.0, h.y))
+  ) / (2.0 * h);
+  return g * 1414.213562;
+}
+
+/**
+ * Sample the reveal capture at a given reveal-rect UV. Pixels that fall
+ * outside the reveal rectangle contribute nothing (the atlas beyond the
+ * capture region is cleared alpha=0 anyway, but an explicit clamp keeps
+ * refracted samples from bleeding onto unrelated atlas slots if we ever
+ * pack multiple captures into the same texture).
+ */
+vec4 sampleRevealClamped(vec2 revealUV) {
+  if (revealUV.x < 0.0 || revealUV.x > 1.0 ||
+      revealUV.y < 0.0 || revealUV.y > 1.0) {
+    return vec4(0.0);
+  }
+  vec2 uv = vec2(revealUV.x * u_revealRegion.x,
+                 (1.0 - revealUV.y) * u_revealRegion.y);
+  return texture(u_reveal, uv);
+}
+
+void main() {
+  vec2 localCoord = v_uv * u_resolution;
+  float sdf = mainSDF(localCoord);
+  float px = u_dpr / u_resolution.y;
+  float edgeWidth = max(2.0 * px, 1.0 / u_resolution.y);
+  float mask = 1.0 - smoothstep(-edgeWidth, edgeWidth, sdf);
+  if (mask <= 0.0) discard;
+
+  vec2 baseRevealUV = (localCoord - u_revealRect.xy) / u_revealRect.zw;
+
+  // Refraction offset in "lens viewport fractions" — identical math to MAIN.
+  vec2 offLens = vec2(0.0);
+  if (u_refThickness > 0.0 && u_refFactor > 0.0 && sdf < 5.0 * px) {
+    vec2 res1x = u_resolution / u_dpr;
+    float nm = -sdf * res1x.y;
+    float xr = 1.0 - nm / u_refThickness;
+    float tI = asin(pow(clamp(xr, 0.0, 1.0), 2.0));
+    float tT = asin(sin(tI) / 1.5);
+    float ef = -tan(tT - tI) * u_refFactor;
+    if (nm >= u_refThickness) ef = 0.0;
+    if (ef > 0.0) {
+      vec2 n = getNormal(localCoord);
+      offLens = -n * ef * 0.05 * u_dpr
+                * vec2(u_resolution.y / u_resolution.x, 1.0);
+    }
+  }
+
+  // Rescale the offset from "lens viewport fractions" into "reveal-rect
+  // UV fractions". Keeps the displacement magnitude tied to the physical
+  // lens even when the reveal element is larger or smaller than the lens.
+  vec2 revealOff = offLens * (u_resolution / u_revealRect.zw);
+
+  vec4 color;
+  if (u_refDispersion <= 0.001 || revealOff == vec2(0.0)) {
+    color = sampleRevealClamped(baseRevealUV + revealOff);
+  } else {
+    // Chromatic dispersion: shift per-channel sample position, mirroring
+    // MAIN's sampleDispersion but in reveal-rect UV space.
+    vec4 sampR = sampleRevealClamped(
+      baseRevealUV + revealOff * (1.0 - (N_R - 1.0) * u_refDispersion));
+    vec4 sampG = sampleRevealClamped(baseRevealUV + revealOff);
+    vec4 sampB = sampleRevealClamped(
+      baseRevealUV + revealOff * (1.0 - (N_B - 1.0) * u_refDispersion));
+    // Alpha is taken from the central sample — the per-channel alphas are
+    // all within a sub-pixel of each other, so mixing them would just add
+    // noise at text edges.
+    color = vec4(sampR.r, sampG.g, sampB.b, sampG.a);
+  }
+
+  if (color.a <= 0.0) discard;
+  fragColor = color * mask;
+}`;
+
 export const MAIN_FRAGMENT = `#version 300 es
 precision highp float;
 

@@ -122,7 +122,7 @@ export default function DemoPage() {
             </p>
 
             <h2
-              data-liquid-reveal={1}
+              data-liquid-reveal-index={1}
               className="text-7xl md:text-8xl font-black uppercase leading-[0.9] text-white"
             >
               only under
