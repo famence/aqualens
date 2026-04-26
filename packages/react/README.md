@@ -55,17 +55,17 @@ export function HeroGlass() {
 
 ## Props (high level)
 
-| Prop | Description |
-| --- | --- |
-| `snapshotTarget` | Snapshot root: `HTMLElement` or `null`. |
-| `resolution` | `0.1`–`3.0`, default `2` — internal capture scale. |
-| `refraction`, `glare` | Same shapes as core (`RefractionOptions`, `GlareOptions`). |
-| `blurRadius`, `blurEdge` | Blur strength and edge clamping. |
-| `opaqueOverlap` | macOS-style stacking when lenses use different `z-index`. |
-| `powerSave` | Use lightweight non-WebGL path. |
-| `onInit` | <code>(lens) => void</code> when the lens is ready. |
-| `as` | Polymorphic host element (default `div`). |
-| *(also)* | Standard `HTMLAttributes` for the host (except `children` typing). |
+| Prop                     | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `snapshotTarget`         | Snapshot root: `HTMLElement` or `null`.                            |
+| `resolution`             | `0.1`–`3.0`, default `2` — internal capture scale.                 |
+| `refraction`, `glare`    | Same shapes as core (`RefractionOptions`, `GlareOptions`).         |
+| `blurRadius`, `blurEdge` | Blur strength and edge clamping.                                   |
+| `opaqueOverlap`          | macOS-style stacking when lenses use different `z-index`.          |
+| `powerSave`              | Use lightweight non-WebGL path.                                    |
+| `onInit`                 | <code>(lens) => void</code> when the lens is ready.                |
+| `as`                     | Polymorphic host element (default `div`).                          |
+| _(also)_                 | Standard `HTMLAttributes` for the host (except `children` typing). |
 
 ## Refs
 

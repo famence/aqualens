@@ -570,7 +570,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
     for (const lens of this.lenses) {
       const si = lens.options.stackingIndex;
       const groupSize =
-        si === undefined ? 1 : (explicitGroups.get(si)?.length ?? 1);
+        si === undefined ? 1 : explicitGroups.get(si)?.length ?? 1;
       const alone = groupSize === 1;
       lens._setTintMode(alone && !cascadeActive ? "css" : "webgl");
     }
