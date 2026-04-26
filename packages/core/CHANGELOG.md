@@ -1,5 +1,15 @@
 # @aqualens/core
 
+## 2.2.0
+
+### Minor Changes
+
+- [`c0a8433`](https://github.com/famence/aqualens/commit/c0a84339ec56defa838e44e548577972478eee52) Thanks [@famence](https://github.com/famence)! - improved data-liquid-reveal functionality
+
+### Patch Changes
+
+- [`5363d23`](https://github.com/famence/aqualens/commit/5363d23b2f2f66e0cc6b8723642f686faa24d483) Thanks [@famence](https://github.com/famence)! - Re-read the lens `tint` from CSS whenever the element's class or style changes (or during a transition/animation). Previously the tint was sampled only once at construction, so toggling a class that changed `background-color` did not update the lens tint.
+
 ## 2.1.0
 
 ### Minor Changes
