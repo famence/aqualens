@@ -2,6 +2,7 @@ import html2canvas from "html2canvas-pro";
 import { effectiveZ, parseTransform } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import type { DynMeta } from "./gl-utils";
+import { LENS_DOM_ATTR } from "./lens";
 
 const MAX_CONCURRENT_DYN_RECAPTURE = 2;
 
@@ -511,9 +512,22 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
         useCORS: true,
         removeContainer: true,
         logging: false,
-        ignoreElements: (ignoredElement: Element) =>
-          ignoredElement.tagName === "CANVAS" ||
-          (ignoredElement as HTMLElement).hasAttribute("data-liquid-ignore"),
+        ignoreElements: (ignoredElement: Element) => {
+          if (ignoredElement.tagName === "CANVAS") return true;
+          const el = ignoredElement as HTMLElement;
+          if (el.hasAttribute("data-liquid-ignore")) return true;
+          // Lens roots (and their entire subtree) must be excluded so a
+          // recapture of a fixed wrapper that contains lenses does not
+          // bake the lens content into the snapshot texture — otherwise
+          // a lens would refract its own DOM content / nested lenses.
+          if (
+            typeof el.closest === "function" &&
+            el.closest(`[${LENS_DOM_ATTR}]`)
+          ) {
+            return true;
+          }
+          return false;
+        },
         onclone: objectFitPatch.onclone,
       })
         .then((capturedCanvas) => {
@@ -992,9 +1006,22 @@ export function triggerLensContentCaptures(
       useCORS: true,
       removeContainer: true,
       logging: false,
-      ignoreElements: (el: Element) =>
-        el.tagName === "CANVAS" ||
-        (el as HTMLElement).hasAttribute("data-liquid-ignore"),
+      ignoreElements: (el: Element) => {
+        if (el.tagName === "CANVAS") return true;
+        const htmlEl = el as HTMLElement;
+        if (htmlEl.hasAttribute("data-liquid-ignore")) return true;
+        // Skip any descendant lens — its DOM content is captured by
+        // its own snapshot pass. Without this exclusion, a parent
+        // lens's content snapshot would re-bake nested lenses (and
+        // their padded refraction) on top of itself.
+        if (typeof htmlEl.closest === "function") {
+          const ancestorLens = htmlEl.closest(`[${LENS_DOM_ATTR}]`);
+          if (ancestorLens !== null && ancestorLens !== lens.element) {
+            return true;
+          }
+        }
+        return false;
+      },
       onclone: objectFitPatch.onclone,
     })
       .then((canvas) => {

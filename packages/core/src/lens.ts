@@ -12,7 +12,8 @@ import {
   type CornerRadii,
 } from "./css-parser";
 
-export type TintMode = "webgl" | "css";
+/** Marker attribute placed on the DOM element of every lens. */
+export const LENS_DOM_ATTR = "data-aqualens-lens";
 
 export class AqualensLens implements AqualensLensInstance {
   renderer: AqualensRenderer;
@@ -26,28 +27,25 @@ export class AqualensLens implements AqualensLensInstance {
   shadowParams: ShadowParams | null = null;
 
   /**
-   * How the glass tint is rendered for this lens:
-   * - `webgl` — tint sampled from CSS, applied via the WebGL shader. The
-   *   lens element gets a `background-color: transparent !important`
-   *   override (and same for `background`) so:
-   *     1. snapshots taken of the page see *behind* the lens, not the
-   *        lens's own bg colour (otherwise refraction would sample the
-   *        lens's bg, producing garbage);
-   *     2. the lens's bg never bleeds through the canvas's anti-aliased
-   *        edges (where canvas alpha drops below 1).
-   *   The user's intended bg-color is tracked in a shadow store
-   *   (`_userBgColor`) and used both as the WebGL tint colour and to
-   *   reconstruct the cascade during `getComputedStyle` peeks.
-   * - `css` — the lens keeps its native CSS `background-color`; the WebGL
-   *   shader uses an alpha-zero tint so it doesn't double-apply. This
-   *   avoids GPU work for tint and lets CSS `background-color` transitions
-   *   run naturally. The renderer picks `css` when the lens has no peer
-   *   with the same `stackingIndex` and the canvas is not z-indexed above
-   *   the page (i.e. cascade mode is inactive).
+   * The public `<canvas>` element appended into the lens DOM as the very
+   * first child. WebGL renders into the renderer's offscreen private canvas
+   * and the relevant region is then copied here via `drawImage`. Because
+   * this canvas lives **inside** the lens, the lens's own DOM content
+   * paints naturally on top of it (CSS stacking) and is therefore never
+   * picked up by WebGL refraction.
    */
-  _tintMode: TintMode = "webgl";
-  private _tintModeApplied = false;
-  private _zIndexBumped = false;
+  publicCanvas: HTMLCanvasElement;
+  publicCtx: CanvasRenderingContext2D;
+  /** Public canvas backing-store dimensions, in device pixels. */
+  publicCanvasW = 0;
+  publicCanvasH = 0;
+  /** Padding (CSS px) added around the lens rect to host shadow / shadowPad. */
+  publicCanvasPad = 0;
+  /** Whether we installed `isolation: isolate` (so destroy() can revert it). */
+  private _isolationApplied = false;
+  /** Whether we overrode element `z-index` from `stackingIndex`. */
+  private _stackingZApplied = false;
+  /** Original inline z-index before we started syncing to stackingIndex. */
   private _savedZIndexInline = "";
 
   /**
@@ -109,12 +107,22 @@ export class AqualensLens implements AqualensLensInstance {
     this.element = element;
     this.options = { ...options };
 
+    // The lens element must establish a containing block for our
+    // absolutely-positioned public canvas. If the user did not pick a
+    // positioned value we default to `relative`.
     if (
       !this.element.style.position ||
       this.element.style.position === "static"
     ) {
       this.element.style.position = "relative";
     }
+
+    // Marker attribute used by snapshot / dynamic-capture paths to
+    // identify "this is a lens, ignore its subtree from refraction
+    // sources" — without this, dynamic-capture html2canvas of a fixed
+    // ancestor would re-bake lens content (icons, tabs) into the source
+    // texture and lenses would refract themselves.
+    this.element.setAttribute(LENS_DOM_ATTR, "");
 
     const boxShadow = window.getComputedStyle(this.element).boxShadow;
     this.shadowParams = parseBoxShadow(boxShadow);
@@ -131,21 +139,57 @@ export class AqualensLens implements AqualensLensInstance {
     // gradients (we only honour the user's solid background-color for tint).
     this.element.style.setProperty("background-image", "none", "important");
 
-    // Capture the user's inline background-color *before* `_setTintMode`
-    // installs our `transparent !important` override (which would erase
-    // the user's value from CSSOM).
+    // Capture the user's inline background-color *before* we install our
+    // `transparent !important` override (which would erase the user's
+    // value from CSSOM).
     this._captureUserInlineBg();
+    // Make sure the lens itself never paints any background — the WebGL
+    // canvas inside the lens paints both the refracted scene AND the tint
+    // colour, so any CSS background would show through anti-aliased
+    // edges and double-tint anything inside the SDF shape.
+    this._applyOverride();
+    this._updateTintFromCss();
+    this._syncStackingZIndex();
 
-    // Default to WebGL tint at construction; the renderer reconciles modes
-    // before the first render based on stacking-group membership.
-    this._setTintMode("webgl");
+    // Build the per-lens public canvas. It is positioned absolute and
+    // covers the full lens rect (including shadowPad on every side) so
+    // glass refraction, glare and box-shadow all fit inside it.
+    //
+    // CRITICAL: `z-index: -1` puts the canvas BEHIND the lens's DOM
+    // content. Without it, the canvas (positioned, painting group 6)
+    // would paint OVER any in-flow children of the lens (painting
+    // group 3) and obscure them. To make sure `z-index: -1` stays
+    // contained inside the lens (and doesn't bleed below the lens's
+    // own background), we also force the lens itself to establish a
+    // stacking context via `isolation: isolate`.
+    this.publicCanvas = document.createElement("canvas");
+    this.publicCanvas.setAttribute("data-aqualens-canvas", "");
+    this.publicCanvas.setAttribute("data-liquid-ignore", "");
+    this.publicCanvas.style.cssText =
+      "position:absolute;pointer-events:none;left:0;top:0;width:100%;height:100%;z-index:-1;";
+    const ctx = this.publicCanvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Aqualens: 2D canvas context unavailable");
+    }
+    this.publicCtx = ctx;
+    if (this.element.firstChild) {
+      this.element.insertBefore(this.publicCanvas, this.element.firstChild);
+    } else {
+      this.element.appendChild(this.publicCanvas);
+    }
+    if (!this.element.style.isolation) {
+      this.element.style.isolation = "isolate";
+      this._isolationApplied = true;
+    }
 
     this.updateMetrics();
+    this._syncPublicCanvasSize();
 
     if (typeof ResizeObserver !== "undefined") {
       this._sizeObs = new ResizeObserver(() => {
         this.invalidateStyleMetrics();
         this.updateMetrics();
+        this._syncPublicCanvasSize();
         this.renderer.requestRender();
       });
       this._sizeObs.observe(this.element);
@@ -251,7 +295,33 @@ export class AqualensLens implements AqualensLensInstance {
     }
 
     if (typeof MutationObserver !== "undefined") {
-      this._contentObserver = new MutationObserver(() => {
+      this._contentObserver = new MutationObserver((mutations) => {
+        // Skip mutations that are just our own public canvas being
+        // resized / its attributes touched — they don't change the
+        // lens's user-content silhouette.
+        let realChange = false;
+        for (const mutation of mutations) {
+          if (mutation.target === this.publicCanvas) continue;
+          if (
+            mutation.type === "childList" &&
+            (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)
+          ) {
+            // Ignore if the only thing changing is the public canvas itself
+            // being added/removed.
+            const onlyOurs = [
+              ...mutation.addedNodes,
+              ...mutation.removedNodes,
+            ].every((node) => node === this.publicCanvas);
+            if (!onlyOurs) {
+              realChange = true;
+              break;
+            }
+          } else if (mutation.type === "characterData") {
+            realChange = true;
+            break;
+          }
+        }
+        if (!realChange) return;
         this._contentCaptureDirty = true;
         this.renderer.requestRender();
       });
@@ -335,6 +405,7 @@ export class AqualensLens implements AqualensLensInstance {
 
   /** HOT: called every render for every lens; rect only read when dirty, style/radii when dirty. */
   updateMetrics(): void {
+    this._syncStackingZIndex();
     if (this._rectDirty) {
       const rect = this.element.getBoundingClientRect();
       this.rectPx = {
@@ -411,6 +482,61 @@ export class AqualensLens implements AqualensLensInstance {
     };
   }
 
+  /**
+   * Resize the public canvas to match the lens rect plus shadowPad on
+   * every side. The CSS layout is fixed (`inset: -shadowPad`), but the
+   * backing-store dimensions (`canvas.width` / `canvas.height`) are kept
+   * in sync with `dpr` and the current rect size so refraction stays
+   * sharp on HiDPI displays and animations.
+   */
+  _syncPublicCanvasSize(): void {
+    const rect = this.rectPx;
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      if (this.publicCanvasW !== 0 || this.publicCanvasH !== 0) {
+        this.publicCanvas.width = 0;
+        this.publicCanvas.height = 0;
+        this.publicCanvasW = 0;
+        this.publicCanvasH = 0;
+      }
+      return;
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const shadowPad = this.computeShadowPad();
+    const cssWidth = rect.width + 2 * shadowPad;
+    const cssHeight = rect.height + 2 * shadowPad;
+    const backingWidth = Math.max(1, Math.ceil(cssWidth * dpr));
+    const backingHeight = Math.max(1, Math.ceil(cssHeight * dpr));
+
+    if (shadowPad !== this.publicCanvasPad) {
+      this.publicCanvas.style.left = `${-shadowPad}px`;
+      this.publicCanvas.style.top = `${-shadowPad}px`;
+      this.publicCanvasPad = shadowPad;
+    }
+    this.publicCanvas.style.width = `${cssWidth}px`;
+    this.publicCanvas.style.height = `${cssHeight}px`;
+    if (
+      this.publicCanvasW !== backingWidth ||
+      this.publicCanvasH !== backingHeight
+    ) {
+      this.publicCanvas.width = backingWidth;
+      this.publicCanvas.height = backingHeight;
+      this.publicCanvasW = backingWidth;
+      this.publicCanvasH = backingHeight;
+    }
+  }
+
+  /** CSS-pixel padding around the lens rect needed to host the box-shadow. */
+  computeShadowPad(): number {
+    const shadow = this.shadowParams;
+    if (!shadow || shadow.color.a <= 0) return 0;
+    return (
+      Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)) +
+      shadow.blur +
+      Math.abs(shadow.spread) +
+      5
+    );
+  }
+
   /** Call when CSS (e.g. border-radius) may have changed so style metrics are recalc'd next frame. */
   invalidateStyleMetrics(): void {
     this._styleMetricsDirty = true;
@@ -418,63 +544,35 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Switch how this lens applies tint. Called by the renderer when stacking
-   * group membership (or cascade activation) changes. No-op when the mode is
-   * already set.
+   * Keep DOM stacking order in sync with `stackingIndex` so per-lens public
+   * canvases layer exactly like the renderer's group ordering.
+   *
+   * Why this is needed:
+   * - With per-lens canvases, final visible order is CSS stacking order of
+   *   lens elements.
+   * - Renderer cascade order is based on `stackingIndex`.
+   * - If those two differ, you can get a physically correct cascade in the
+   *   texture pipeline but a visually wrong overlap (upper lens appears below).
    */
-  _setTintMode(mode: TintMode): void {
-    if (this._tintModeApplied && this._tintMode === mode) return;
-    this._tintMode = mode;
-    this._tintModeApplied = true;
-    if (mode === "css") {
-      this._enterCssTint();
-    } else {
-      this._enterWebglTint();
+  private _syncStackingZIndex(): void {
+    const si = this.options.stackingIndex;
+    if (si !== undefined) {
+      if (!this._stackingZApplied) {
+        this._savedZIndexInline = this.element.style.zIndex;
+        this._stackingZApplied = true;
+      }
+      this.element.style.zIndex = String(si);
+      return;
     }
-  }
 
-  /**
-   * In CSS-tint mode the lens element keeps its own `background-color`, so
-   * the WebGL shader must not paint tint (otherwise the lens is tinted
-   * twice). We also lift the element above the WebGL canvas so the CSS
-   * background is actually visible — by default the canvas is appended
-   * last to `<body>` and would otherwise paint over the lens.
-   *
-   * To restore the user's bg-color: remove our `!important` override and
-   * re-install the user's tracked inline value (if we had captured one).
-   * Class-based bg colours flow through the cascade naturally once our
-   * override is gone, so we don't need to touch them.
-   */
-  private _enterCssTint(): void {
-    this._removeOverrideRestoreUserInline();
-    this.options.tint = DEFAULT_TINT;
-    this._bumpZIndex();
-  }
-
-  /**
-   * In WebGL-tint mode we want a `transparent !important` override on the
-   * lens element's `background-color` / `background` so the page snapshot
-   * (used as the refraction source) sees *behind* the lens, and so the
-   * lens's own bg never bleeds through the WebGL canvas's anti-aliased
-   * edges where alpha drops below 1.
-   *
-   * The override would normally clobber the user's React inline
-   * `style={{ backgroundColor }}` in CSSOM (one declaration per property),
-   * so before installing it we make sure the user's intended value is
-   * captured in `_userBgColor`. Subsequent React re-renders or
-   * `Animation.commitStyles()` writes that re-introduce a non-important
-   * inline value are caught by `MutationObserver` → `_reconcileBgOverride`,
-   * which keeps the shadow up to date and re-applies our override.
-   *
-   * `background-image: none !important` is applied unconditionally (in the
-   * constructor) to suppress gradients — we only honour solid
-   * background-colours for tint.
-   */
-  private _enterWebglTint(): void {
-    this._restoreZIndex();
-    this._captureUserInlineBg();
-    this._applyOverride();
-    this._updateTintFromCss();
+    if (!this._stackingZApplied) return;
+    if (this._savedZIndexInline === "") {
+      this.element.style.removeProperty("z-index");
+    } else {
+      this.element.style.zIndex = this._savedZIndexInline;
+    }
+    this._stackingZApplied = false;
+    this._savedZIndexInline = "";
   }
 
   /**
@@ -506,28 +604,6 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Remove our `!important` override and restore whatever non-important
-   * inline value the user had (tracked in `_userBgColor` / `_userBg`).
-   * If the user never had an inline value, the cascade flows naturally
-   * (e.g. the Tailwind class wins).
-   */
-  private _removeOverrideRestoreUserInline(): void {
-    const style = this.element.style;
-    if (style.getPropertyPriority("background-color") === "important") {
-      style.removeProperty("background-color");
-    }
-    if (style.getPropertyPriority("background") === "important") {
-      style.removeProperty("background");
-    }
-    if (this._userBgColor) {
-      style.setProperty("background-color", this._userBgColor);
-    }
-    if (this._userBg) {
-      style.setProperty("background", this._userBg);
-    }
-  }
-
-  /**
    * Called by `MutationObserver` when a foreign mutation hit the element's
    * `style` attribute. If the user's non-important inline `background-color`
    * (or `background`) is back in CSSOM (because React re-rendered, or
@@ -536,7 +612,6 @@ export class AqualensLens implements AqualensLensInstance {
    * to `transparent` again.
    */
   private _reconcileBgOverride(): void {
-    if (this._tintMode !== "webgl") return;
     const style = this.element.style;
     let needReapply = false;
 
@@ -555,37 +630,12 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Lift the lens above the WebGL canvas via inline `z-index: 1`. We only do
-   * this when computed `z-index` is `auto` (otherwise the user has chosen a
-   * stacking order on purpose and we honour it; documented behaviour is that
-   * an explicit z-index < 1 may hide the CSS tint behind the canvas).
-   */
-  private _bumpZIndex(): void {
-    if (this._zIndexBumped) return;
-    const computedZ = window.getComputedStyle(this.element).zIndex;
-    if (computedZ !== "auto") return;
-    this._savedZIndexInline = this.element.style.zIndex;
-    this.element.style.zIndex = "1";
-    this._zIndexBumped = true;
-  }
-
-  private _restoreZIndex(): void {
-    if (!this._zIndexBumped) return;
-    if (this._savedZIndexInline === "") {
-      this.element.style.removeProperty("z-index");
-    } else {
-      this.element.style.zIndex = this._savedZIndexInline;
-    }
-    this._zIndexBumped = false;
-    this._savedZIndexInline = "";
-  }
-
-  /**
    * Re-read the lens's "intended" `background-color` from the cascade and
-   * sync it into `options.tint`. In webgl mode the lens element carries a
-   * `transparent !important` override (see `_enterWebglTint`), which would
-   * make `getComputedStyle` always return `transparent`. To reach the
-   * underlying cascade we do a **strip-and-restore peek**:
+   * sync it into `options.tint`. The lens element carries a
+   * `transparent !important` override on `background-color` /
+   * `background`, which would make `getComputedStyle` always return
+   * `transparent`. To reach the underlying cascade we do a
+   * **strip-and-restore peek**:
    *
    *   1. Remove our override.
    *   2. Re-install the user's last-known non-important inline value
@@ -604,17 +654,8 @@ export class AqualensLens implements AqualensLensInstance {
    * which lets the `MutationObserver`'s `oldValue` net-change check
    * correctly classify it as "no real mutation" and skip both
    * reconciliation and invalidation.
-   *
-   * In `css` tint mode this is a no-op that keeps the shader tint
-   * transparent — the lens element's own CSS `background-color` provides
-   * the tint visually, so the WebGL shader must not double-apply.
    */
   private _updateTintFromCss(): void {
-    if (this._tintMode === "css") {
-      this.options.tint = DEFAULT_TINT;
-      return;
-    }
-
     const style = this.element.style;
     const hasOurOverride =
       style.getPropertyPriority("background-color") === "important" ||
@@ -649,7 +690,6 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   _activate(): void {
-    this.renderer.canvas.style.opacity = "1";
     this._triggerInit();
   }
 
@@ -707,11 +747,25 @@ export class AqualensLens implements AqualensLensInstance {
       this._origAnimate = null;
     }
 
-    this._restoreZIndex();
+    this.publicCanvas.remove();
+    this.element.removeAttribute(LENS_DOM_ATTR);
     this.element.style.removeProperty("backdrop-filter");
     this.element.style.removeProperty("-webkit-backdrop-filter");
     this.element.style.removeProperty("background-image");
     this.element.style.removeProperty("box-shadow");
+    if (this._stackingZApplied) {
+      if (this._savedZIndexInline === "") {
+        this.element.style.removeProperty("z-index");
+      } else {
+        this.element.style.zIndex = this._savedZIndexInline;
+      }
+      this._stackingZApplied = false;
+      this._savedZIndexInline = "";
+    }
+    if (this._isolationApplied) {
+      this.element.style.removeProperty("isolation");
+      this._isolationApplied = false;
+    }
 
     // Tear down our `transparent !important` override and restore
     // whatever non-important inline value the user originally had — so

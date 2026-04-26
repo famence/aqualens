@@ -19,17 +19,6 @@ export interface LensViewport {
   viewportHeightPx: number;
 }
 
-export function computeLensShadowPad(lens: AqualensLens): number {
-  const shadow = lens.shadowParams;
-  if (!shadow || shadow.color.a <= 0) return 0;
-  return (
-    Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)) +
-    shadow.blur +
-    Math.abs(shadow.spread) +
-    5
-  );
-}
-
 /**
  * Compute the viewport the main/mask shaders use to render a single lens.
  * Returns null when the lens has no rect yet or is too small to paint.
@@ -44,7 +33,7 @@ export function computeSingleLensViewport(
   const rect = lens.rectPx;
   if (!rect) return null;
 
-  const shadowPad = computeLensShadowPad(lens);
+  const shadowPad = lens.computeShadowPad();
   const viewportLeft = rect.left - shadowPad;
   const viewportTop = rect.top - shadowPad;
   const viewportWidthPx = rect.width + 2 * shadowPad;
@@ -118,7 +107,7 @@ export function computeMergedGroupLayout(
 
   let maxShadowPad = 0;
   for (const lens of lenses) {
-    maxShadowPad = Math.max(maxShadowPad, computeLensShadowPad(lens));
+    maxShadowPad = Math.max(maxShadowPad, lens.computeShadowPad());
   }
   const shadowPad = maxShadowPad;
   const padding = Math.max(MERGE_RADIUS_CSS + 10, shadowPad);

@@ -28,7 +28,8 @@
     "html2canvas-pro": "^2.0.2"
   },
   "devDependencies": {
-    "html2canvas-pro": "^2.0.2"
+    "html2canvas-pro": "^2.0.2",
+    "tsup": "^8.5.1"
   },
   "repository": {
     "type": "git",

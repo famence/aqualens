@@ -28,7 +28,8 @@ import {
   copyToCompose,
   runKawaseBlur,
   flattenGroupToCompose,
-  renderLensContentOnCanvas,
+  compositeLensContentToCompose,
+  copyLensRegionsToPublicCanvases,
 } from "./renderer-fbo";
 import {
   resizeCanvas,
@@ -89,12 +90,24 @@ html:not([data-liquid-power-save="true"]) ${REVEAL_CSS_SELECTOR} {
 `;
 
 export class AqualensRenderer implements AqualensRendererInstance {
+  /**
+   * Private offscreen canvas hosting the WebGL2 context. NOT inserted into
+   * the DOM — the only thing the user ever sees is each lens's own
+   * `publicCanvas` (a child of the lens DOM element). After each lens
+   * group is rendered into this private canvas, the relevant regions are
+   * copied into the corresponding public canvases via `drawImage`.
+   *
+   * Keeping the private canvas at full viewport size lets the
+   * `renderer-draw` viewport code keep using `canvas.height` for
+   * GL-coordinate conversions without changes.
+   */
   canvas: HTMLCanvasElement;
   gl: WebGL2RenderingContext;
   lenses: AqualensLens[] = [];
   /**
-   * When true and lenses use different stackingIndex values, higher layers clip
-   * lower ones and each lens samples the original snapshot (macOS-style overlap).
+   * When true and lenses use different stackingIndex values, higher layers
+   * clip lower ones and each lens samples the original snapshot
+   * (macOS-style overlap).
    */
   opaqueOverlap = false;
   texture: WebGLTexture | null = null;
@@ -131,6 +144,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _canvasCopyTexW = 0;
   _canvasCopyTexH = 0;
 
+  /** Texture used to upload `lens._contentCapture` into the compose FBO. */
   _lensContentTex: WebGLTexture | null = null;
   _lensContentTexW = 0;
   _lensContentTexH = 0;
@@ -190,7 +204,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _implicitScratch: AqualensLens[] = [];
   _singleGroupScratch: AqualensLens[] = [];
   _visibleScratch: AqualensLens[] = [];
-  _cascadeZActive = false;
 
   _revealNodes: RevealMeta[] = [];
   _revealComposited = new Set<RevealMeta>();
@@ -204,16 +217,21 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _revealMaskedU!: RevealMaskedUniforms;
 
   constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
+    // Offscreen canvas: NOT appended to DOM. The only canvases the user
+    // ever sees are the per-lens `publicCanvas` siblings created by
+    // `AqualensLens`.
     this.canvas = document.createElement("canvas");
-    this.canvas.style.cssText =
-      "position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none";
     this.canvas.setAttribute("data-liquid-ignore", "");
-    document.body.appendChild(this.canvas);
 
     const ctxAttribs: WebGLContextAttributes = {
       alpha: true,
       premultipliedAlpha: true,
-      preserveDrawingBuffer: false,
+      // Required: lens public canvases sample our private WebGL canvas
+      // via `ctx.drawImage(privateCanvas, ...)` AFTER WebGL has rendered
+      // each group. Without `preserveDrawingBuffer`, the browser is
+      // allowed to discard the backing buffer between draw and read,
+      // which produces empty / stale public canvases.
+      preserveDrawingBuffer: true,
     };
     const glContext = this.canvas.getContext("webgl2", ctxAttribs);
     if (!glContext) throw new Error("Aqualens: WebGL2 unavailable");
@@ -244,10 +262,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     this._onResizeHideHandler = () => {
       if (this._destroyed) return;
-      if (this.canvas.style.opacity === "1") {
-        this._resizeGeneration++;
-        enableResizeFallback(this);
-      }
+      enableResizeFallback(this);
     };
     window.addEventListener("resize", this._onResizeHideHandler, {
       passive: true,
@@ -293,8 +308,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
     ).filter((video) => !isIgnored(video)) as HTMLVideoElement[];
     this._tmpCanvas = document.createElement("canvas");
     this._tmpCtx = this._tmpCanvas.getContext("2d")!;
-
-    this.canvas.style.opacity = "0";
 
     this._workerEnabled =
       typeof OffscreenCanvas !== "undefined" &&
@@ -521,11 +534,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const overscrollY = visualViewport?.offsetTop ?? 0;
     const snapRect = this.snapshotTarget.getBoundingClientRect();
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
     // Group lenses BEFORE updating metrics: tint mode (CSS vs WebGL) depends
     // on stacking-group membership, and the metrics step in turn re-reads CSS
     // background-color whose handling differs per mode.
@@ -558,22 +566,9 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     const implicitCount = implicitLenses.length;
     const totalGroups = implicitCount + sortedExplicitKeys.length;
-    const needCascade = totalGroups > 1;
-    const opaqueCascade = needCascade && this.opaqueOverlap;
-    const cascadeActive = needCascade && !opaqueCascade;
-
-    // Reconcile per-lens tint mode. A lens that has no peer in its stacking
-    // group can keep its CSS background-color (no GPU tint pass, native CSS
-    // transitions). When cascade is active, the WebGL canvas is z-indexed
-    // above the page so the CSS tint would be hidden — fall back to WebGL
-    // tint in that case.
-    for (const lens of this.lenses) {
-      const si = lens.options.stackingIndex;
-      const groupSize =
-        si === undefined ? 1 : explicitGroups.get(si)?.length ?? 1;
-      const alone = groupSize === 1;
-      lens._setTintMode(alone && !cascadeActive ? "css" : "webgl");
-    }
+    const hasMultipleGroups = totalGroups > 1;
+    const opaqueCascade = hasMultipleGroups && this.opaqueOverlap;
+    const cascadeActive = hasMultipleGroups && !opaqueCascade;
 
     for (const lens of this.lenses) {
       lens.updateMetrics();
@@ -583,23 +578,21 @@ export class AqualensRenderer implements AqualensRendererInstance {
     if (revealsActive) triggerRevealCaptures(this);
     const underLensRevealsActive = hasEligibleUnderLensReveals(this);
 
+    // Compose FBO is needed when:
+    //  - there are >1 stacking groups (cascade): later groups must sample
+    //    the already-rendered earlier groups + their DOM content;
+    //  - there are under-lens reveals: their captured pixels must be
+    //    pre-baked into the source texture.
     const useCompose = cascadeActive || underLensRevealsActive;
     this._revealComposited.clear();
 
     if (useCompose) {
       ensureComposeFbo(this);
       copyToCompose(this);
+      // Cascade requires html2canvas snapshots of every lens's DOM content
+      // so we can paint it into the compose FBO between groups (so a
+      // higher-z lens refracts the lower-z lens AND its DOM content).
       if (cascadeActive) triggerLensContentCaptures(this);
-    }
-
-    if (cascadeActive) {
-      if (!this._cascadeZActive) {
-        this.canvas.style.zIndex = "2147483647";
-        this._cascadeZActive = true;
-      }
-    } else if (this._cascadeZActive) {
-      this.canvas.style.zIndex = "";
-      this._cascadeZActive = false;
     }
 
     const blurStale =
@@ -616,6 +609,13 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this._blurredForTextureVersion = this._textureVersion;
       this._blurredForRadius = this._currentBlurRadius;
     }
+
+    // Start with a clean private canvas so previous-frame artefacts do
+    // not leak into the per-lens drawImage copies below.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -634,9 +634,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
         group = explicitGroups.get(ek)!;
       }
 
-      if (useCompose) {
-        this._activeSourceTex = this._composeTex;
-      }
+      // Pick the source texture for this group's refraction sampling.
+      // When cascade or under-lens reveals are active, every group
+      // samples the compose FBO. Compose holds (snapshot + earlier
+      // groups' glass output + their DOM content) at this point.
+      this._activeSourceTex = useCompose ? this._composeTex : null;
 
       const explicitKey =
         groupIdx >= implicitCount
@@ -698,23 +700,29 @@ export class AqualensRenderer implements AqualensRendererInstance {
         );
       }
 
-      if (needCascade && !opaqueCascade) {
-        renderLensContentOnCanvas(this, visible, dpr, overscrollX, overscrollY);
-      }
-
-      if (needCascade && !opaqueCascade && groupIdx < totalGroups - 1) {
+      // Cascade: prepare the compose FBO for the NEXT group BEFORE we
+      // touch the private canvas with `drawImage` reads (which can
+      // invalidate the WebGL backing buffer in some browsers). We want
+      // compose to hold (snapshot + all earlier groups' glass output +
+      // their DOM content), so:
+      //   1. blit the just-rendered private-canvas region into compose,
+      //   2. paint the lens's html2canvas DOM-content snapshot on top
+      //      (so a higher-z lens refracts both the glass and the lens
+      //      contents below it),
+      //   3. blur compose so the next group's blur sample is in sync.
+      if (cascadeActive && groupIdx < totalGroups - 1) {
         flattenGroupToCompose(this, visible, dpr);
+        compositeLensContentToCompose(this, visible, snapRect);
         if (this._currentBlurRadius > 0 && this._composeTex) {
           runKawaseBlur(this, this._composeTex);
         }
       }
 
-      // On-lens reveals: after the glass has been drawn (and, in cascade
-      // mode, after it has been flattened into compose for the next group),
-      // paint any eligible on-lens reveals directly on the default
-      // framebuffer, clipped by this group's SDF. Running AFTER the flatten
-      // keeps the on-lens overlay out of subsequent groups' source texture
-      // so it doesn't propagate through higher lenses.
+      // On-lens reveals: paint any eligible on-lens reveals directly on
+      // the default framebuffer, clipped by this group's SDF. Running
+      // AFTER `flattenGroupToCompose` keeps the on-lens overlay out of
+      // the next group's compose source, so it doesn't propagate
+      // through higher lenses.
       if (revealsActive && explicitKey !== undefined && visible.length > 0) {
         this._compositeOnLensRevealsForVisibleGroup(
           visible,
@@ -723,6 +731,27 @@ export class AqualensRenderer implements AqualensRendererInstance {
           overscrollX,
           overscrollY,
         );
+      }
+
+      // Copy the freshly rendered region of the private canvas into the
+      // public canvas of every lens in this group. This is the moment
+      // where the WebGL output becomes user-visible. MUST happen AFTER
+      // the cascade-prep step above, because some browsers invalidate
+      // the WebGL backing buffer once it has been read via `drawImage`.
+      if (visible.length > 0) {
+        copyLensRegionsToPublicCanvases(this, visible, dpr);
+      }
+
+      // Clear the private canvas before the next group renders. This
+      // prevents the next group's `drawImage` (when its public-canvas
+      // region overlaps with this one's) from picking up this group's
+      // pixels. Re-bind the default FB explicitly — at this point we
+      // could still be bound to compose / a blur level after the
+      // cascade-prep work above.
+      if (groupIdx < totalGroups - 1) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        gl.clear(gl.COLOR_BUFFER_BIT);
       }
     }
 
@@ -1042,11 +1071,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this.gl.deleteTexture(this._lensContentTex);
       this._lensContentTex = null;
     }
-    if (this._cascadeZActive) {
-      this.canvas.style.zIndex = "";
-      this._cascadeZActive = false;
-    }
-    this.canvas.remove();
     const styleElement = document.getElementById("liquid-gl-dynamic-styles");
     styleElement?.remove();
   }

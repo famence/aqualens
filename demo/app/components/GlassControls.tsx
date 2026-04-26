@@ -47,8 +47,8 @@ export const DEFAULT_GLASS_SETTINGS: GlassSettings = {
   blurRadius: 0,
   blurEdge: true,
   size: 208,
-  tintHex: "#ffffff",
-  tintAlpha: 0,
+  tintHex: "#ff00ff",
+  tintAlpha: 0.3,
 };
 
 const PANEL_REFRACTION = {

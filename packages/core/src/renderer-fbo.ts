@@ -6,7 +6,12 @@ const MAX_BLUR_LEVELS = 7;
 
 export function ensureBlurPyramid(renderer: AqualensRenderer): void {
   if (renderer._blurLevelCount === 0) return;
-  if (!renderer.texture || renderer.textureWidth === 0 || renderer.textureHeight === 0) return;
+  if (
+    !renderer.texture ||
+    renderer.textureWidth === 0 ||
+    renderer.textureHeight === 0
+  )
+    return;
 
   const baseW = renderer.textureWidth;
   const baseH = renderer.textureHeight;
@@ -71,10 +76,7 @@ export function runKawaseBlur(
   renderer: AqualensRenderer,
   sourceTexture?: WebGLTexture,
 ): void {
-  if (
-    !renderer.texture ||
-    renderer._blurPyramid.length === 0
-  ) return;
+  if (!renderer.texture || renderer._blurPyramid.length === 0) return;
 
   const gl = renderer.gl;
   const pyramid = renderer._blurPyramid;
@@ -113,7 +115,11 @@ export function runKawaseBlur(
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, srcLevel.tex);
     gl.uniform1i(renderer._kawaseUpU.tex, 0);
-    gl.uniform2f(renderer._kawaseUpU.halfPixel, 0.5 / srcLevel.w, 0.5 / srcLevel.h);
+    gl.uniform2f(
+      renderer._kawaseUpU.halfPixel,
+      0.5 / srcLevel.w,
+      0.5 / srcLevel.h,
+    );
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -125,7 +131,12 @@ export function ensureComposeFbo(renderer: AqualensRenderer): void {
   const width = renderer.textureWidth;
   const height = renderer.textureHeight;
   if (width === 0 || height === 0) return;
-  if (renderer._composeFbo && renderer._composeFboW === width && renderer._composeFboH === height) return;
+  if (
+    renderer._composeFbo &&
+    renderer._composeFboW === width &&
+    renderer._composeFboH === height
+  )
+    return;
 
   destroyComposeFbo(renderer);
 
@@ -215,6 +226,13 @@ function ensureCanvasCopyTex(
   }
 }
 
+/**
+ * Copy the just-rendered canvas region for a group of lenses into the
+ * compose FBO at the matching document-space position. This is a
+ * cascade-mode helper: a higher-z group then samples the compose FBO and
+ * thus refracts the glass effect of the lower-z group as part of its
+ * own background.
+ */
 export function flattenGroupToCompose(
   renderer: AqualensRenderer,
   lenses: AqualensLens[],
@@ -222,6 +240,7 @@ export function flattenGroupToCompose(
 ): void {
   const gl = renderer.gl;
   if (!renderer._composeFbo || !renderer._composeTex) return;
+  if (lenses.length === 0) return;
 
   let left = Infinity;
   let top = Infinity;
@@ -231,14 +250,7 @@ export function flattenGroupToCompose(
   for (const lens of lenses) {
     const rect = lens.rectPx;
     if (!rect) continue;
-    const shadowParams = lens.shadowParams;
-    const hasShadow = shadowParams != null && shadowParams.color.a > 0;
-    const shadowPad = hasShadow
-      ? Math.max(Math.abs(shadowParams!.offsetX), Math.abs(shadowParams!.offsetY)) +
-        shadowParams!.blur +
-        Math.abs(shadowParams!.spread) +
-        5
-      : 0;
+    const shadowPad = lens.computeShadowPad();
     const MERGE_RADIUS_CSS = 30;
     const mergeExtra = lenses.length > 1 ? MERGE_RADIUS_CSS + 10 : 0;
     const padding = Math.max(mergeExtra, shadowPad);
@@ -274,9 +286,14 @@ export function flattenGroupToCompose(
   const canvasX = Math.max(0, Math.round((leftVisible + overscrollX) * dpr));
   const canvasY = Math.max(
     0,
-    Math.round(renderer.canvas.height - (topVisible + overscrollY + visibleHeight) * dpr),
+    Math.round(
+      renderer.canvas.height - (topVisible + overscrollY + visibleHeight) * dpr,
+    ),
   );
-  const canvasWidth = Math.min(renderer.canvas.width - canvasX, Math.ceil(visibleWidth * dpr));
+  const canvasWidth = Math.min(
+    renderer.canvas.width - canvasX,
+    Math.ceil(visibleWidth * dpr),
+  );
   const canvasHeight = Math.min(
     renderer.canvas.height - canvasY,
     Math.ceil(visibleHeight * dpr),
@@ -347,10 +364,7 @@ function ensureLensContentTex(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
-  if (
-    width > renderer._lensContentTexW ||
-    height > renderer._lensContentTexH
-  ) {
+  if (width > renderer._lensContentTexW || height > renderer._lensContentTexH) {
     const newW = Math.max(width, renderer._lensContentTexW);
     const newH = Math.max(height, renderer._lensContentTexH);
     gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
@@ -372,8 +386,11 @@ function ensureLensContentTex(
 
 /**
  * After flattening a group's glass effect into the compose FBO, paint each
- * lens's cached DOM-content capture on top so that higher stacking groups
- * can distort the content through refraction/blur.
+ * lens's cached html2canvas DOM-content snapshot on top so that higher
+ * stacking groups can refract / blur the lens contents through their own
+ * glass effect. This is what gives the user-visible behaviour: a lens at
+ * stackingIndex N refracts both the glass AND the DOM content of every
+ * lens with stackingIndex < N that overlaps with it.
  */
 export function compositeLensContentToCompose(
   renderer: AqualensRenderer,
@@ -382,20 +399,18 @@ export function compositeLensContentToCompose(
 ): void {
   const gl = renderer.gl;
   if (!renderer._composeFbo || !renderer._composeTex) return;
+  if (lenses.length === 0) return;
 
   let anyDrawn = false;
+  let programBound = false;
 
   for (const lens of lenses) {
     if (!lens._contentCapture) continue;
     const rect = lens.rectPx;
     if (!rect) continue;
 
-    const texX = Math.round(
-      (rect.left - snapRect.left) * renderer.scaleFactor,
-    );
-    const texY = Math.round(
-      (rect.top - snapRect.top) * renderer.scaleFactor,
-    );
+    const texX = Math.round((rect.left - snapRect.left) * renderer.scaleFactor);
+    const texY = Math.round((rect.top - snapRect.top) * renderer.scaleFactor);
     const texW = Math.round(rect.width * renderer.scaleFactor);
     const texH = Math.round(rect.height * renderer.scaleFactor);
 
@@ -425,15 +440,17 @@ export function compositeLensContentToCompose(
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, renderer._composeFbo);
+    if (!programBound) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, renderer._composeFbo);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(renderer._compositeProgram);
+      gl.bindVertexArray(renderer._vao);
+      gl.activeTexture(gl.TEXTURE0);
+      programBound = true;
+    }
+
     gl.viewport(texX, texY, texW, texH);
-
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-
-    gl.useProgram(renderer._compositeProgram);
-    gl.bindVertexArray(renderer._vao);
-    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
     gl.uniform1i(renderer._compositeU.src, 0);
     gl.uniform2f(
@@ -453,75 +470,93 @@ export function compositeLensContentToCompose(
 }
 
 /**
- * Render each lens's cached DOM-content capture directly on the main canvas
- * (default framebuffer) so that the content appears on the WebGL layer.
- * This allows higher-z-index canvas rendering to cover the original DOM text
- * while keeping the content visible through the glass.
+ * For every lens in a freshly-rendered group, copy its rectangle from
+ * the private WebGL canvas into the lens's `publicCanvas` (a 2D canvas
+ * sitting inside the lens DOM). After this call returns, the user sees
+ * the new pixels.
  *
- * NOTE: uploads WITHOUT UNPACK_FLIP_Y because the default framebuffer has
- * a different Y convention than the compose FBO.
+ * Source rect on the private canvas is `lens.rectPx` (CSS pixels) plus
+ * shadow padding on every side, scaled to device pixels. Destination on
+ * the public canvas matches the canvas's full backing-store dimensions.
  */
-export function renderLensContentOnCanvas(
+export function copyLensRegionsToPublicCanvases(
   renderer: AqualensRenderer,
   lenses: AqualensLens[],
   dpr: number,
-  overscrollX: number,
-  overscrollY: number,
 ): void {
-  const gl = renderer.gl;
-  let anyDrawn = false;
+  if (lenses.length === 0) return;
 
-  for (const lens of lenses) {
-    if (!lens._contentCapture) continue;
-    const rect = lens.rectPx;
-    if (!rect) continue;
+  // Make sure GPU-side rendering is flushed so subsequent `drawImage` of
+  // the WebGL canvas sees the new pixels (some browsers otherwise read
+  // stale contents).
+  renderer.gl.flush();
 
-    const captureW = lens._contentCapture.width;
-    const captureH = lens._contentCapture.height;
-    if (captureW <= 0 || captureH <= 0) continue;
-
-    const viewportX = Math.round((rect.left + overscrollX) * dpr);
-    const viewportY = Math.round(
-      renderer.canvas.height - (rect.top + overscrollY + rect.height) * dpr,
-    );
-    const viewportW = Math.ceil(rect.width * dpr);
-    const viewportH = Math.ceil(rect.height * dpr);
-    if (viewportW <= 0 || viewportH <= 0) continue;
-
-    ensureLensContentTex(renderer, captureW, captureH);
-
-    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      lens._contentCapture,
-    );
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(viewportX, viewportY, viewportW, viewportH);
-
-    gl.useProgram(renderer._compositeProgram);
-    gl.bindVertexArray(renderer._vao);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, renderer._lensContentTex);
-    gl.uniform1i(renderer._compositeU.src, 0);
-    gl.uniform2f(
-      renderer._compositeU.srcRegion,
-      captureW / renderer._lensContentTexW,
-      captureH / renderer._lensContentTexH,
-    );
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    anyDrawn = true;
+  let overscrollX = 0;
+  let overscrollY = 0;
+  if (window.visualViewport) {
+    overscrollX = window.visualViewport.offsetLeft;
+    overscrollY = window.visualViewport.offsetTop;
   }
 
-  if (anyDrawn) {
-    gl.bindVertexArray(null);
+  const canvasH = renderer.canvas.height;
+
+  for (const lens of lenses) {
+    const rect = lens.rectPx;
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+
+    lens._syncPublicCanvasSize();
+    const target = lens.publicCanvas;
+    const ctx = lens.publicCtx;
+    if (target.width === 0 || target.height === 0) continue;
+
+    const shadowPad = lens.computeShadowPad();
+    const cssLeft = rect.left - shadowPad + overscrollX;
+    const cssTop = rect.top - shadowPad + overscrollY;
+    const cssWidth = rect.width + 2 * shadowPad;
+    const cssHeight = rect.height + 2 * shadowPad;
+
+    // Source coordinates on the WebGL canvas. Note: drawImage uses
+    // top-left origin for both source and destination, so we don't need
+    // to deal with the GL bottom-left convention here — the WebGL
+    // backing store is sampled top-down.
+    const sx = Math.round(cssLeft * dpr);
+    const sy = Math.round(cssTop * dpr);
+    const sw = Math.max(1, Math.round(cssWidth * dpr));
+    const sh = Math.max(1, Math.round(cssHeight * dpr));
+
+    ctx.clearRect(0, 0, target.width, target.height);
+
+    // Clip the source rect to the WebGL canvas; offset destination
+    // accordingly so the pixels land at the right spot inside the public
+    // canvas (which mirrors the full lens+shadowPad area).
+    const srcX = Math.max(0, sx);
+    const srcY = Math.max(0, sy);
+    const srcRight = Math.min(renderer.canvas.width, sx + sw);
+    const srcBottom = Math.min(canvasH, sy + sh);
+    const srcW = srcRight - srcX;
+    const srcH = srcBottom - srcY;
+    if (srcW <= 0 || srcH <= 0) continue;
+
+    const dstX = srcX - sx;
+    const dstY = srcY - sy;
+    const dstW = srcW;
+    const dstH = srcH;
+
+    try {
+      ctx.drawImage(
+        renderer.canvas,
+        srcX,
+        srcY,
+        srcW,
+        srcH,
+        dstX,
+        dstY,
+        dstW,
+        dstH,
+      );
+    } catch {
+      // Source/destination canvas was zero-sized or otherwise invalid —
+      // skip silently and let the next frame retry.
+    }
   }
 }
