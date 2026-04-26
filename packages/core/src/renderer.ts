@@ -526,10 +526,9 @@ export class AqualensRenderer implements AqualensRendererInstance {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    for (const lens of this.lenses) {
-      lens.updateMetrics();
-    }
-
+    // Group lenses BEFORE updating metrics: tint mode (CSS vs WebGL) depends
+    // on stacking-group membership, and the metrics step in turn re-reads CSS
+    // background-color whose handling differs per mode.
     const implicitLenses = this._implicitScratch;
     implicitLenses.length = 0;
 
@@ -561,12 +560,29 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const totalGroups = implicitCount + sortedExplicitKeys.length;
     const needCascade = totalGroups > 1;
     const opaqueCascade = needCascade && this.opaqueOverlap;
+    const cascadeActive = needCascade && !opaqueCascade;
+
+    // Reconcile per-lens tint mode. A lens that has no peer in its stacking
+    // group can keep its CSS background-color (no GPU tint pass, native CSS
+    // transitions). When cascade is active, the WebGL canvas is z-indexed
+    // above the page so the CSS tint would be hidden — fall back to WebGL
+    // tint in that case.
+    for (const lens of this.lenses) {
+      const si = lens.options.stackingIndex;
+      const groupSize =
+        si === undefined ? 1 : (explicitGroups.get(si)?.length ?? 1);
+      const alone = groupSize === 1;
+      lens._setTintMode(alone && !cascadeActive ? "css" : "webgl");
+    }
+
+    for (const lens of this.lenses) {
+      lens.updateMetrics();
+    }
 
     const revealsActive = hasEligibleReveals(this);
     if (revealsActive) triggerRevealCaptures(this);
     const underLensRevealsActive = hasEligibleUnderLensReveals(this);
 
-    const cascadeActive = needCascade && !opaqueCascade;
     const useCompose = cascadeActive || underLensRevealsActive;
     this._revealComposited.clear();
 
