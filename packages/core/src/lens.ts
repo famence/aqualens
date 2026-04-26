@@ -39,8 +39,17 @@ export class AqualensLens implements AqualensLensInstance {
   /** Public canvas backing-store dimensions, in device pixels. */
   publicCanvasW = 0;
   publicCanvasH = 0;
-  /** Padding (CSS px) added around the lens rect to host shadow / shadowPad. */
-  publicCanvasPad = 0;
+  /**
+   * CSS-pixel offset of the public canvas top-left relative to the lens
+   * element's top-left. Negative values mean the canvas extends above /
+   * to the left of the lens element (used to host shadow padding and the
+   * shared-merge bbox that may extend beyond an individual lens's rect).
+   */
+  publicCanvasOffsetLeft = 0;
+  publicCanvasOffsetTop = 0;
+  /** CSS-pixel size the canvas currently occupies. */
+  publicCanvasCssWidth = 0;
+  publicCanvasCssHeight = 0;
   /** Whether we installed `isolation: isolate` (so destroy() can revert it). */
   private _isolationApplied = false;
   /** Whether we overrode element `z-index` from `stackingIndex`. */
@@ -483,15 +492,33 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Resize the public canvas to match the lens rect plus shadowPad on
-   * every side. The CSS layout is fixed (`inset: -shadowPad`), but the
-   * backing-store dimensions (`canvas.width` / `canvas.height`) are kept
-   * in sync with `dpr` and the current rect size so refraction stays
-   * sharp on HiDPI displays and animations.
+   * Resize the public canvas to host a given viewport-CSS-pixel region.
+   * The region is expressed in the same coordinate space as
+   * `getBoundingClientRect()` (top-left of the visual viewport). The
+   * canvas is positioned absolutely inside the lens with negative offsets
+   * when the region extends beyond the lens's rect (typical for both
+   * shadow padding and merged-group union bboxes).
+   *
+   * Callers:
+   *  - single-lens path: lens rect ± shadowPad (see {@link _syncPublicCanvasSize});
+   *  - merged-group path: the group's padded union bbox (so every lens in
+   *    the group gets an identical-content canvas covering the whole
+   *    blob, with overlapping prior-DOM-order lens rects later cleared).
    */
-  _syncPublicCanvasSize(): void {
+  _syncPublicCanvasForRegion(
+    regionLeft: number,
+    regionTop: number,
+    regionWidth: number,
+    regionHeight: number,
+  ): void {
     const rect = this.rectPx;
-    if (!rect || rect.width <= 0 || rect.height <= 0) {
+    if (
+      !rect ||
+      rect.width <= 0 ||
+      rect.height <= 0 ||
+      regionWidth <= 0 ||
+      regionHeight <= 0
+    ) {
       if (this.publicCanvasW !== 0 || this.publicCanvasH !== 0) {
         this.publicCanvas.width = 0;
         this.publicCanvas.height = 0;
@@ -501,19 +528,27 @@ export class AqualensLens implements AqualensLensInstance {
       return;
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const shadowPad = this.computeShadowPad();
-    const cssWidth = rect.width + 2 * shadowPad;
-    const cssHeight = rect.height + 2 * shadowPad;
-    const backingWidth = Math.max(1, Math.ceil(cssWidth * dpr));
-    const backingHeight = Math.max(1, Math.ceil(cssHeight * dpr));
+    const offsetLeft = regionLeft - rect.left;
+    const offsetTop = regionTop - rect.top;
+    const backingWidth = Math.max(1, Math.ceil(regionWidth * dpr));
+    const backingHeight = Math.max(1, Math.ceil(regionHeight * dpr));
 
-    if (shadowPad !== this.publicCanvasPad) {
-      this.publicCanvas.style.left = `${-shadowPad}px`;
-      this.publicCanvas.style.top = `${-shadowPad}px`;
-      this.publicCanvasPad = shadowPad;
+    if (offsetLeft !== this.publicCanvasOffsetLeft) {
+      this.publicCanvas.style.left = `${offsetLeft}px`;
+      this.publicCanvasOffsetLeft = offsetLeft;
     }
-    this.publicCanvas.style.width = `${cssWidth}px`;
-    this.publicCanvas.style.height = `${cssHeight}px`;
+    if (offsetTop !== this.publicCanvasOffsetTop) {
+      this.publicCanvas.style.top = `${offsetTop}px`;
+      this.publicCanvasOffsetTop = offsetTop;
+    }
+    if (regionWidth !== this.publicCanvasCssWidth) {
+      this.publicCanvas.style.width = `${regionWidth}px`;
+      this.publicCanvasCssWidth = regionWidth;
+    }
+    if (regionHeight !== this.publicCanvasCssHeight) {
+      this.publicCanvas.style.height = `${regionHeight}px`;
+      this.publicCanvasCssHeight = regionHeight;
+    }
     if (
       this.publicCanvasW !== backingWidth ||
       this.publicCanvasH !== backingHeight
@@ -523,6 +558,25 @@ export class AqualensLens implements AqualensLensInstance {
       this.publicCanvasW = backingWidth;
       this.publicCanvasH = backingHeight;
     }
+  }
+
+  /**
+   * Single-lens convenience: size the canvas to lens rect + shadowPad on
+   * every side. Used when the lens is rendered alone (no merged group).
+   */
+  _syncPublicCanvasSize(): void {
+    const rect = this.rectPx;
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      this._syncPublicCanvasForRegion(0, 0, 0, 0);
+      return;
+    }
+    const shadowPad = this.computeShadowPad();
+    this._syncPublicCanvasForRegion(
+      rect.left - shadowPad,
+      rect.top - shadowPad,
+      rect.width + 2 * shadowPad,
+      rect.height + 2 * shadowPad,
+    );
   }
 
   /** CSS-pixel padding around the lens rect needed to host the box-shadow. */

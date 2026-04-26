@@ -204,6 +204,15 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _implicitScratch: AqualensLens[] = [];
   _singleGroupScratch: AqualensLens[] = [];
   _visibleScratch: AqualensLens[] = [];
+  /**
+   * Set of lenses whose `publicCanvas` has been (re)painted in the
+   * current `render()` pass. After the per-group loop finishes, every
+   * lens NOT in this set is reset to its own single-lens region so
+   * stale merged-bbox pixels (left over from a previous frame where
+   * the lens was part of a merged group) cannot leak into the viewport
+   * via the canvas's negative offsets.
+   */
+  _renderedLensesScratch = new Set<AqualensLens>();
 
   _revealNodes: RevealMeta[] = [];
   _revealComposited = new Set<RevealMeta>();
@@ -621,6 +630,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     const singleGroup = this._singleGroupScratch;
+    const renderedLenses = this._renderedLensesScratch;
+    renderedLenses.clear();
 
     for (let groupIdx = 0; groupIdx < totalGroups; groupIdx++) {
       let group: AqualensLens[];
@@ -740,6 +751,9 @@ export class AqualensRenderer implements AqualensRendererInstance {
       // the WebGL backing buffer once it has been read via `drawImage`.
       if (visible.length > 0) {
         copyLensRegionsToPublicCanvases(this, visible, dpr);
+        for (let li = 0; li < visible.length; li++) {
+          renderedLenses.add(visible[li]);
+        }
       }
 
       // Clear the private canvas before the next group renders. This
@@ -753,6 +767,24 @@ export class AqualensRenderer implements AqualensRendererInstance {
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         gl.clear(gl.COLOR_BUFFER_BIT);
       }
+    }
+
+    // Reset per-lens public canvases that were NOT repainted in this
+    // frame back to their own single-lens region (lens rect + shadow
+    // pad). When a lens leaves a merged group — either because its
+    // siblings scrolled off-screen, or because it itself went off-screen
+    // — its canvas would otherwise stay sized to the previous frame's
+    // union bbox and keep stale merged-blob pixels. Because the canvas
+    // is positioned absolutely inside the lens with negative offsets
+    // that span the bbox, those pixels can intrude into the viewport
+    // long after the lens itself has scrolled away (visible as a
+    // "ghost" of the merged blob a screen later). Resyncing to the
+    // lens's own rect both clamps the canvas back inside the lens and
+    // discards the stale buffer when dimensions actually shrink.
+    for (let li = 0; li < this.lenses.length; li++) {
+      const lens = this.lenses[li];
+      if (renderedLenses.has(lens)) continue;
+      lens._syncPublicCanvasSize();
     }
 
     this._activeSourceTex = null;

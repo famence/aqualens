@@ -469,15 +469,231 @@ export function compositeLensContentToCompose(
   }
 }
 
+/** Visual-viewport overscroll offset shared by both copy paths. */
+function getOverscroll(): { x: number; y: number } {
+  if (window.visualViewport) {
+    return {
+      x: window.visualViewport.offsetLeft,
+      y: window.visualViewport.offsetTop,
+    };
+  }
+  return { x: 0, y: 0 };
+}
+
 /**
- * For every lens in a freshly-rendered group, copy its rectangle from
- * the private WebGL canvas into the lens's `publicCanvas` (a 2D canvas
- * sitting inside the lens DOM). After this call returns, the user sees
- * the new pixels.
+ * Single-lens copy: source rect on the private canvas is `lens.rectPx`
+ * (CSS pixels) plus shadow padding on every side, scaled to device
+ * pixels. Destination on the public canvas matches the canvas's full
+ * backing-store dimensions.
+ */
+function copySingleLensRegionToPublicCanvas(
+  renderer: AqualensRenderer,
+  lens: AqualensLens,
+  dpr: number,
+  overscrollX: number,
+  overscrollY: number,
+): void {
+  const rect = lens.rectPx;
+  if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+  lens._syncPublicCanvasSize();
+  const target = lens.publicCanvas;
+  const ctx = lens.publicCtx;
+  if (target.width === 0 || target.height === 0) return;
+
+  const shadowPad = lens.computeShadowPad();
+  const cssLeft = rect.left - shadowPad + overscrollX;
+  const cssTop = rect.top - shadowPad + overscrollY;
+  const cssWidth = rect.width + 2 * shadowPad;
+  const cssHeight = rect.height + 2 * shadowPad;
+
+  // Source coordinates on the WebGL canvas. drawImage uses top-left
+  // origin for both source and destination, so we don't need to deal
+  // with the GL bottom-left convention here — the WebGL backing store
+  // is sampled top-down.
+  const sx = Math.round(cssLeft * dpr);
+  const sy = Math.round(cssTop * dpr);
+  const sw = Math.max(1, Math.round(cssWidth * dpr));
+  const sh = Math.max(1, Math.round(cssHeight * dpr));
+
+  ctx.clearRect(0, 0, target.width, target.height);
+
+  // Clip the source rect to the WebGL canvas; offset destination
+  // accordingly so the pixels land at the right spot inside the public
+  // canvas (which mirrors the full lens+shadowPad area).
+  const srcX = Math.max(0, sx);
+  const srcY = Math.max(0, sy);
+  const srcRight = Math.min(renderer.canvas.width, sx + sw);
+  const srcBottom = Math.min(renderer.canvas.height, sy + sh);
+  const srcW = srcRight - srcX;
+  const srcH = srcBottom - srcY;
+  if (srcW <= 0 || srcH <= 0) return;
+
+  const dstX = srcX - sx;
+  const dstY = srcY - sy;
+
+  try {
+    ctx.drawImage(
+      renderer.canvas,
+      srcX,
+      srcY,
+      srcW,
+      srcH,
+      dstX,
+      dstY,
+      srcW,
+      srcH,
+    );
+  } catch {
+    // Source/destination canvas was zero-sized or otherwise invalid —
+    // skip silently and let the next frame retry.
+  }
+}
+
+/** Merge-bbox padding mirror of `flattenGroupToCompose` / `computeMergedGroupLayout`. */
+const MERGE_BBOX_EXTRA_CSS = 30 + 10;
+
+/**
+ * Merged-group copy: every lens in the group receives an identical
+ * canvas sized to the group's padded union bbox, painted with the full
+ * merged-blob render. We then clear the document-space rectangle of
+ * every lens that precedes this one in DOM order, so the upper lens's
+ * canvas is transparent over those areas and never paints over the
+ * lower lens's children (text, badges, etc.) inside its stacking
+ * context.
  *
- * Source rect on the private canvas is `lens.rectPx` (CSS pixels) plus
- * shadow padding on every side, scaled to device pixels. Destination on
- * the public canvas matches the canvas's full backing-store dimensions.
+ * Bridge pixels (between two non-overlapping rects) live inside the
+ * union bbox but outside any single lens rect, so they are never
+ * cleared and remain visible on whichever canvas is on top — the merged
+ * shape now reads as one continuous blob across all member lenses.
+ */
+function copyMergedGroupToPublicCanvases(
+  renderer: AqualensRenderer,
+  lenses: AqualensLens[],
+  dpr: number,
+  overscrollX: number,
+  overscrollY: number,
+): void {
+  // Compute the padded union bbox in viewport CSS coords. Mirrors the
+  // padding rules used by `renderMergedGroup` / `flattenGroupToCompose`
+  // so the canvas covers exactly the rendered shape.
+  let unionLeft = Infinity;
+  let unionTop = Infinity;
+  let unionRight = -Infinity;
+  let unionBottom = -Infinity;
+  let maxShadowPad = 0;
+  for (const lens of lenses) {
+    const rect = lens.rectPx;
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.left < unionLeft) unionLeft = rect.left;
+    if (rect.top < unionTop) unionTop = rect.top;
+    if (rect.left + rect.width > unionRight) unionRight = rect.left + rect.width;
+    if (rect.top + rect.height > unionBottom)
+      unionBottom = rect.top + rect.height;
+    const sp = lens.computeShadowPad();
+    if (sp > maxShadowPad) maxShadowPad = sp;
+  }
+  if (!isFinite(unionLeft)) return;
+
+  const padding = Math.max(MERGE_BBOX_EXTRA_CSS, maxShadowPad);
+  unionLeft -= padding;
+  unionTop -= padding;
+  unionRight += padding;
+  unionBottom += padding;
+  const unionWidth = unionRight - unionLeft;
+  const unionHeight = unionBottom - unionTop;
+
+  // Sort by DOM order so we know which lenses paint underneath this
+  // one and need to be cleared from the upper canvas. Items earlier in
+  // the sorted array paint first.
+  const sortedByDom = lenses.slice().sort((a, b) => {
+    const cmp = a.element.compareDocumentPosition(b.element);
+    if (cmp & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (cmp & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  // Source-rect clamp on the WebGL canvas, computed once per group.
+  const sx = Math.round((unionLeft + overscrollX) * dpr);
+  const sy = Math.round((unionTop + overscrollY) * dpr);
+  const sw = Math.max(1, Math.round(unionWidth * dpr));
+  const sh = Math.max(1, Math.round(unionHeight * dpr));
+  const srcX = Math.max(0, sx);
+  const srcY = Math.max(0, sy);
+  const srcRight = Math.min(renderer.canvas.width, sx + sw);
+  const srcBottom = Math.min(renderer.canvas.height, sy + sh);
+  const srcW = srcRight - srcX;
+  const srcH = srcBottom - srcY;
+  const hasSourcePixels = srcW > 0 && srcH > 0;
+  const dstX = srcX - sx;
+  const dstY = srcY - sy;
+
+  for (let i = 0; i < sortedByDom.length; i++) {
+    const lens = sortedByDom[i];
+    const rect = lens.rectPx;
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+
+    lens._syncPublicCanvasForRegion(
+      unionLeft,
+      unionTop,
+      unionWidth,
+      unionHeight,
+    );
+    const target = lens.publicCanvas;
+    const ctx = lens.publicCtx;
+    if (target.width === 0 || target.height === 0) continue;
+
+    ctx.clearRect(0, 0, target.width, target.height);
+
+    if (hasSourcePixels) {
+      try {
+        ctx.drawImage(
+          renderer.canvas,
+          srcX,
+          srcY,
+          srcW,
+          srcH,
+          dstX,
+          dstY,
+          srcW,
+          srcH,
+        );
+      } catch {
+        // Source canvas momentarily invalid — let the next frame retry.
+      }
+    }
+
+    // Erase rectangles of lenses that precede this one in DOM order.
+    // Without this step the upper lens's canvas would paint the merged
+    // blob (and shadow) on top of every prior lens's stacking context,
+    // hiding their children. Clearing makes those areas fully
+    // transparent on the upper canvas so the prior lens's own canvas
+    // and DOM content show through naturally.
+    for (let j = 0; j < i; j++) {
+      const prior = sortedByDom[j];
+      const priorRect = prior.rectPx;
+      if (!priorRect || priorRect.width <= 0 || priorRect.height <= 0) continue;
+      const cx = (priorRect.left - unionLeft) * dpr;
+      const cy = (priorRect.top - unionTop) * dpr;
+      const cw = priorRect.width * dpr;
+      const ch = priorRect.height * dpr;
+      ctx.clearRect(cx, cy, cw, ch);
+    }
+  }
+}
+
+/**
+ * For every lens in a freshly-rendered group, copy the relevant region
+ * of the private WebGL canvas into the lens's `publicCanvas` (a 2D
+ * canvas sitting inside the lens DOM). After this call returns, the
+ * user sees the new pixels.
+ *
+ * Single-lens groups use the lens's own rect + shadowPad as the canvas
+ * region. Multi-lens (merged) groups share the same padded union bbox
+ * across all lenses' canvases, plus a per-canvas clear-pass that
+ * subtracts the rectangles of DOM-earlier siblings so the upper lens
+ * never overpaints lower lenses' children inside their stacking
+ * contexts.
  */
 export function copyLensRegionsToPublicCanvases(
   renderer: AqualensRenderer,
@@ -491,72 +707,24 @@ export function copyLensRegionsToPublicCanvases(
   // stale contents).
   renderer.gl.flush();
 
-  let overscrollX = 0;
-  let overscrollY = 0;
-  if (window.visualViewport) {
-    overscrollX = window.visualViewport.offsetLeft;
-    overscrollY = window.visualViewport.offsetTop;
+  const overscroll = getOverscroll();
+
+  if (lenses.length === 1) {
+    copySingleLensRegionToPublicCanvas(
+      renderer,
+      lenses[0],
+      dpr,
+      overscroll.x,
+      overscroll.y,
+    );
+    return;
   }
 
-  const canvasH = renderer.canvas.height;
-
-  for (const lens of lenses) {
-    const rect = lens.rectPx;
-    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-
-    lens._syncPublicCanvasSize();
-    const target = lens.publicCanvas;
-    const ctx = lens.publicCtx;
-    if (target.width === 0 || target.height === 0) continue;
-
-    const shadowPad = lens.computeShadowPad();
-    const cssLeft = rect.left - shadowPad + overscrollX;
-    const cssTop = rect.top - shadowPad + overscrollY;
-    const cssWidth = rect.width + 2 * shadowPad;
-    const cssHeight = rect.height + 2 * shadowPad;
-
-    // Source coordinates on the WebGL canvas. Note: drawImage uses
-    // top-left origin for both source and destination, so we don't need
-    // to deal with the GL bottom-left convention here — the WebGL
-    // backing store is sampled top-down.
-    const sx = Math.round(cssLeft * dpr);
-    const sy = Math.round(cssTop * dpr);
-    const sw = Math.max(1, Math.round(cssWidth * dpr));
-    const sh = Math.max(1, Math.round(cssHeight * dpr));
-
-    ctx.clearRect(0, 0, target.width, target.height);
-
-    // Clip the source rect to the WebGL canvas; offset destination
-    // accordingly so the pixels land at the right spot inside the public
-    // canvas (which mirrors the full lens+shadowPad area).
-    const srcX = Math.max(0, sx);
-    const srcY = Math.max(0, sy);
-    const srcRight = Math.min(renderer.canvas.width, sx + sw);
-    const srcBottom = Math.min(canvasH, sy + sh);
-    const srcW = srcRight - srcX;
-    const srcH = srcBottom - srcY;
-    if (srcW <= 0 || srcH <= 0) continue;
-
-    const dstX = srcX - sx;
-    const dstY = srcY - sy;
-    const dstW = srcW;
-    const dstH = srcH;
-
-    try {
-      ctx.drawImage(
-        renderer.canvas,
-        srcX,
-        srcY,
-        srcW,
-        srcH,
-        dstX,
-        dstY,
-        dstW,
-        dstH,
-      );
-    } catch {
-      // Source/destination canvas was zero-sized or otherwise invalid —
-      // skip silently and let the next frame retry.
-    }
-  }
+  copyMergedGroupToPublicCanvases(
+    renderer,
+    lenses,
+    dpr,
+    overscroll.x,
+    overscroll.y,
+  );
 }
