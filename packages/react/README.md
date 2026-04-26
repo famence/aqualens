@@ -67,15 +67,27 @@ export function HeroGlass() {
 | `as` | Polymorphic host element (default `div`). |
 | *(also)* | Standard `HTMLAttributes` for the host (except `children` typing). |
 
-## Ref
+## Refs
+
+`<Aqualens>` exposes two independent refs so you can access the host DOM node
+and the underlying lens instance separately:
+
+- **`ref`** — points to the host element (as with any DOM component). Its
+  type follows the `as` prop (defaults to `HTMLDivElement`).
+- **`lensRef`** — receives the `AqualensLensInstance` as soon as the lens is
+  ready, and is reset to `null` when the component unmounts or the renderer
+  mode switches.
 
 ```tsx
 import { useRef } from "react";
-import { Aqualens, type AqualensRef } from "@aqualens/react";
+import { Aqualens, type AqualensLensInstance } from "@aqualens/react";
 
-const ref = useRef<AqualensRef>(null);
-// ref.current?.lens — AqualensLensInstance
-// ref.current?.element — host DOM node
+function Glass() {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const lensRef = useRef<AqualensLensInstance | null>(null);
+
+  return <Aqualens ref={elementRef} lensRef={lensRef} />;
+}
 ```
 
 ## Hooks

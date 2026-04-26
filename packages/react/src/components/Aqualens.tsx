@@ -1,12 +1,13 @@
 import React, {
+  useCallback,
   useEffect,
   useRef,
   useState,
   useMemo,
   forwardRef,
-  useImperativeHandle,
   type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   getSharedRenderer,
@@ -59,8 +60,9 @@ interface AqualensOwnProps {
 
   /** Called once after the lens is initialized. */
   onInit?(lens: AqualensLensInstance): void;
-  style?: CSSProperties;
-  className?: string;
+
+  /** Ref that receives the underlying lens instance once it is created. */
+  lensRef?: Ref<AqualensLensInstance | null>;
 }
 
 export type AqualensProps<C extends React.ElementType = "div"> =
@@ -71,13 +73,13 @@ export type AqualensProps<C extends React.ElementType = "div"> =
       keyof AqualensOwnProps | "as" | "children"
     >;
 
-export interface AqualensRef {
-  lens: AqualensLensInstance | null;
-  element: HTMLElement | null;
-}
+type ElementFromAs<C extends React.ElementType> =
+  React.ComponentPropsWithRef<C> extends { ref?: React.Ref<infer E> | undefined }
+    ? NonNullable<E>
+    : Element;
 
 type AqualensComponent = <C extends React.ElementType = "div">(
-  props: AqualensProps<C> & React.RefAttributes<AqualensRef>,
+  props: AqualensProps<C> & React.RefAttributes<ElementFromAs<C>>,
 ) => React.ReactElement | null;
 
 function shallowEqual<T extends object>(
@@ -101,6 +103,15 @@ function useShallowMemo<T extends object>(value: T | undefined): T | undefined {
     ref.current = value;
   }
   return ref.current;
+}
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
+  if (!ref) return;
+  if (typeof ref === "function") {
+    ref(value);
+  } else {
+    (ref as React.MutableRefObject<T | null>).current = value;
+  }
 }
 
 function buildConfig(options: {
@@ -137,12 +148,13 @@ const AqualensInner = <C extends React.ElementType = "div">(
     opaqueOverlap,
     powerSave,
     onInit,
+    lensRef: externalLensRef,
     style,
     className,
     as: Tag,
     ...rest
   }: AqualensProps<C>,
-  ref: React.ForwardedRef<AqualensRef>,
+  forwardedRef: React.ForwardedRef<HTMLElement>,
 ) => {
   const stableRefraction = useShallowMemo(refraction);
   const stableGlare = useShallowMemo(glare);
@@ -151,18 +163,30 @@ const AqualensInner = <C extends React.ElementType = "div">(
   const rendererRef = useRef<AqualensRenderer | null>(null);
   const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
   const elementRef = useRef<HTMLElement | null>(null);
-  const lensRef = useRef<AqualensLensInstance | null>(null);
+  const lensInstanceRef = useRef<AqualensLensInstance | null>(null);
+  const externalLensRefRef = useRef<typeof externalLensRef>(externalLensRef);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      get lens() {
-        return lensRef.current;
-      },
-      get element() {
-        return elementRef.current;
-      },
-    }),
+  useEffect(() => {
+    externalLensRefRef.current = externalLensRef;
+    assignRef(externalLensRef, lensInstanceRef.current);
+    return () => {
+      assignRef(externalLensRef, null);
+    };
+  }, [externalLensRef]);
+
+  const setElementRef = useCallback(
+    (element: HTMLElement | null) => {
+      elementRef.current = element;
+      assignRef(forwardedRef, element);
+    },
+    [forwardedRef],
+  );
+
+  const setLensInstance = useCallback(
+    (lens: AqualensLensInstance | null) => {
+      lensInstanceRef.current = lens;
+      assignRef(externalLensRefRef.current, lens);
+    },
     [],
   );
 
@@ -224,10 +248,10 @@ const AqualensInner = <C extends React.ElementType = "div">(
       const powerSaveRenderer = getSharedPowerSaveRenderer();
       powerSaveRendererRef.current = powerSaveRenderer;
       const lens = powerSaveRenderer.addLens(elementRef.current, config);
-      lensRef.current = lens;
+      setLensInstance(lens);
       return () => {
         lens.destroy();
-        lensRef.current = null;
+        setLensInstance(null);
         powerSaveRendererRef.current = null;
       };
     }
@@ -235,17 +259,17 @@ const AqualensInner = <C extends React.ElementType = "div">(
     if (!renderer) return;
 
     const lens = renderer.addLens(elementRef.current, config);
-    lensRef.current = lens;
+    setLensInstance(lens);
 
     return () => {
       lens.destroy();
-      lensRef.current = null;
+      setLensInstance(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderer, powerSave]);
 
   useEffect(() => {
-    const lens = lensRef.current;
+    const lens = lensInstanceRef.current;
     if (!lens) return;
     const preservedTint = lens.options.tint;
     const next = buildConfig({
@@ -315,7 +339,7 @@ const AqualensInner = <C extends React.ElementType = "div">(
 
   return (
     <Component
-      ref={elementRef as React.Ref<HTMLElement>}
+      ref={setElementRef as React.Ref<HTMLElement>}
       className={className}
       style={mergedStyle}
       {...rest}

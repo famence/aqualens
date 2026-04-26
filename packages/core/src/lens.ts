@@ -1,8 +1,4 @@
-import {
-  parseBgColorToRgba,
-  parseBoxShadow,
-  type ShadowParams,
-} from "./utils";
+import { parseBgColorToRgba, parseBoxShadow, type ShadowParams } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import {
   DEFAULT_TINT,

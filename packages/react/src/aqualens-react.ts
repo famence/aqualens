@@ -1,8 +1,5 @@
 export { Aqualens } from "./components/Aqualens";
-export type {
-  AqualensProps,
-  AqualensRef,
-} from "./components/Aqualens";
+export type { AqualensProps } from "./components/Aqualens";
 
 export { useAqualens, useDynamicElement } from "./hooks/use-aqualens";
 
