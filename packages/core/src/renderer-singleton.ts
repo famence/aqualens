@@ -46,15 +46,13 @@ export function updateSharedRendererConfig(
 ): Promise<void> {
   if (!instance) return Promise.resolve();
   const target =
-    snapshotTarget !== undefined ? (snapshotTarget ?? document.body) : null;
+    snapshotTarget !== undefined ? snapshotTarget ?? document.body : null;
   const resolutionValue =
-    resolution !== undefined
-      ? Math.max(0.1, Math.min(3.0, resolution))
-      : null;
-  const targetChanged =
-    target !== null && target !== lastSnapshotTarget;
+    resolution !== undefined ? Math.max(0.1, Math.min(3.0, resolution)) : null;
+  const targetChanged = target !== null && target !== lastSnapshotTarget;
   const resolutionChanged =
-    resolutionValue !== null && (lastResolution === null || resolutionValue !== lastResolution);
+    resolutionValue !== null &&
+    (lastResolution === null || resolutionValue !== lastResolution);
   if (!targetChanged && !resolutionChanged) return Promise.resolve();
 
   if (targetChanged && target !== null) {

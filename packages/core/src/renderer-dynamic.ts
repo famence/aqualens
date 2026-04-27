@@ -502,6 +502,13 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
       if (renderer._dynRecaptureInFlight >= MAX_CONCURRENT_DYN_RECAPTURE)
         return;
       meta._capturing = true;
+      // Clear the flag BEFORE html2canvas runs so that a foreign
+      // re-invalidation (setDirty / step / event listeners) during the
+      // in-flight capture stays observable on the next frame, and so
+      // that a 0×0 / rejected capture cannot keep the flag set forever
+      // (which would call html2canvas every render frame, re-fetching
+      // every resource it pulls into its document clone).
+      meta.needsRecapture = false;
       renderer._dynRecaptureInFlight += 1;
 
       const objectFitPatch = prepareObjectFitPatch(element);
@@ -533,7 +540,6 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
         .then((capturedCanvas) => {
           if (capturedCanvas.width > 0 && capturedCanvas.height > 0) {
             meta.lastCapture = capturedCanvas;
-            meta.needsRecapture = false;
           }
         })
         .catch(() => {})
@@ -983,12 +989,61 @@ export function addDynamicElementImpl(
 
 const MAX_CONCURRENT_LENS_CONTENT_CAPTURE = 2;
 
+/**
+ * True when the lens DOM has anything `triggerLensContentCaptures` would
+ * actually want to bake into a snapshot. We mirror html2canvas's
+ * `ignoreElements` predicate (canvas, `[data-liquid-ignore]`, descendant
+ * lenses) so that a lens whose only descendants are excluded does not
+ * spawn a useless html2canvas pass — html2canvas-pro can return a 0×0
+ * canvas for an "all-children-excluded" subtree, which would prevent
+ * `_contentCaptureDirty` from ever being cleared and trigger one
+ * html2canvas call per render frame in cascade mode (re-fetching every
+ * stylesheet, image and HMR resource it pulls into its document clone).
+ *
+ * Common trigger: bare `<Aqualens />` lenses with no children — they only
+ * contain the public canvas (which is excluded), so the capture is empty.
+ */
+function lensHasCapturableContent(lensElement: HTMLElement): boolean {
+  for (
+    let node: ChildNode | null = lensElement.firstChild;
+    node !== null;
+    node = node.nextSibling
+  ) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if ((node.textContent ?? "").length > 0) return true;
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = node as HTMLElement;
+    if (el.tagName === "CANVAS") continue;
+    if (typeof el.hasAttribute === "function" &&
+      el.hasAttribute("data-liquid-ignore")
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 export function triggerLensContentCaptures(
   renderer: AqualensRenderer,
 ): void {
   for (const lens of renderer.lenses) {
     if (!lens._contentCaptureDirty || lens._contentCapturing) continue;
     if (!lens.element.isConnected || !lens.rectPx) continue;
+
+    // Empty / fully-excluded lens: skip html2canvas entirely. Without
+    // this guard a `<Aqualens />` with no children (or one containing
+    // only ignored elements) would loop html2canvas every frame in
+    // cascade mode because the resulting 0×0 canvas can never clear
+    // `_contentCaptureDirty`.
+    if (!lensHasCapturableContent(lens.element)) {
+      lens._contentCapture = null;
+      lens._contentCaptureDirty = false;
+      continue;
+    }
+
     if (
       renderer._lensContentRecaptureInFlight >=
       MAX_CONCURRENT_LENS_CONTENT_CAPTURE
@@ -996,6 +1051,13 @@ export function triggerLensContentCaptures(
       return;
 
     lens._contentCapturing = true;
+    // Clear the dirty flag BEFORE kicking off html2canvas. If the
+    // observer (or any other caller) re-marks the lens dirty during
+    // the in-flight capture, we'll see `_contentCaptureDirty === true`
+    // again on the next frame and recapture; if html2canvas resolves
+    // with an empty / failed result, we just leave the flag clean
+    // instead of looping forever.
+    lens._contentCaptureDirty = false;
     renderer._lensContentRecaptureInFlight += 1;
 
     const objectFitPatch = prepareObjectFitPatch(lens.element);
@@ -1027,10 +1089,13 @@ export function triggerLensContentCaptures(
       .then((canvas) => {
         if (canvas.width > 0 && canvas.height > 0) {
           lens._contentCapture = canvas;
-          lens._contentCaptureDirty = false;
+        } else {
+          lens._contentCapture = null;
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        lens._contentCapture = null;
+      })
       .finally(() => {
         lens._contentCapturing = false;
         renderer._lensContentRecaptureInFlight = Math.max(

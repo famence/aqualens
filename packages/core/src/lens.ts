@@ -196,9 +196,19 @@ export class AqualensLens implements AqualensLensInstance {
 
     if (typeof ResizeObserver !== "undefined") {
       this._sizeObs = new ResizeObserver(() => {
+        // Just invalidate metrics and ask for a frame. We deliberately
+        // do NOT sync the public canvas here: when this lens is part
+        // of a merged group its canvas is sized to the group's union
+        // bbox (larger than the lens itself), and `_syncPublicCanvasSize`
+        // would clamp it back to the single-lens region, clearing the
+        // backing buffer. Because the actual render is scheduled on the
+        // next animation frame while the browser paints right after
+        // the observer callback, that intermediate "shrunken + empty"
+        // state is visible as a one-frame flicker. Letting the renderer
+        // pick up the new rect during its own pass keeps the canvas at
+        // its previous (still-mostly-correct) dimensions until the
+        // proper region has been applied AND the new pixels drawn.
         this.invalidateStyleMetrics();
-        this.updateMetrics();
-        this._syncPublicCanvasSize();
         this.renderer.requestRender();
       });
       this._sizeObs.observe(this.element);
