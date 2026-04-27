@@ -15,6 +15,7 @@ import {
   setOpaqueOverlap,
   getSharedPowerSaveRenderer,
   DEFAULT_OPTIONS,
+  LENS_DOM_ATTR,
   type AqualensRenderer,
   type AqualensLensInstance,
   type AqualensConfig,
@@ -307,11 +308,23 @@ const AqualensInner = <C extends React.ElementType = "div">(
 
   const Component = (Tag ?? "div") as React.ElementType;
 
+  // We mark the host element with `LENS_DOM_ATTR` directly in JSX so the very
+  // first paint already carries the attribute. The `AqualensLens` constructor
+  // also sets it (idempotent), but it only runs after `getSharedRenderer`
+  // resolves the snapshot promise. Without this proactive marker, the initial
+  // html2canvas snapshot — which clones the DOM synchronously inside
+  // `captureSnapshot` — bakes the lens's own DOM content into the source
+  // texture, and the lens then refracts itself for the brief window before
+  // the next ResizeObserver-triggered recapture clears the texture (see
+  // `renderer-snapshot.ts:ignoreElementsFunc`).
+  const lensAttrProps = { [LENS_DOM_ATTR]: "" } as Record<string, string>;
+
   return (
     <Component
       ref={setElementRef as React.Ref<HTMLElement>}
       className={className}
       style={mergedStyle}
+      {...lensAttrProps}
       {...rest}
     >
       {children}

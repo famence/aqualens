@@ -422,10 +422,25 @@ export function discoverAndAddFixedElements(
   while ((element = iter.nextNode() as Element | null)) {
     if (element === renderer.canvas || lensElements.has(element as HTMLElement))
       continue;
-    if ((element as HTMLElement).closest?.("[data-liquid-ignore]")) continue;
+    // Lens elements may be marked with `LENS_DOM_ATTR` by their React
+    // wrapper before the `AqualensLens` constructor runs (so html2canvas
+    // can already exclude them on the very first capture). If discovery
+    // races ahead of the corresponding `addLens` call, the element won't
+    // yet be in `lensElements`, and we'd otherwise enroll the lens host
+    // (or any descendant of it) as a fixed dynamic source — which would
+    // re-bake the lens content into the snapshot texture every frame,
+    // re-introducing the very flicker the early attribute fixes.
+    const htmlElement = element as HTMLElement;
+    if (
+      typeof htmlElement.closest === "function" &&
+      htmlElement.closest(`[${LENS_DOM_ATTR}]`)
+    ) {
+      continue;
+    }
+    if (htmlElement.closest?.("[data-liquid-ignore]")) continue;
     const style = window.getComputedStyle(element);
     if (style.position === "fixed") {
-      addDynamicElementImpl(renderer, element as HTMLElement, {
+      addDynamicElementImpl(renderer, htmlElement, {
         isFixed: true,
       });
     }

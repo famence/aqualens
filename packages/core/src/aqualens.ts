@@ -5,7 +5,7 @@ export {
 } from "./renderer-singleton";
 
 export { AqualensRenderer } from "./renderer";
-export { AqualensLens } from "./lens";
+export { AqualensLens, LENS_DOM_ATTR } from "./lens";
 
 export {
   PowerSaveRenderer,
