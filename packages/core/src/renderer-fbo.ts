@@ -587,7 +587,8 @@ function copyMergedGroupToPublicCanvases(
     if (!rect || rect.width <= 0 || rect.height <= 0) continue;
     if (rect.left < unionLeft) unionLeft = rect.left;
     if (rect.top < unionTop) unionTop = rect.top;
-    if (rect.left + rect.width > unionRight) unionRight = rect.left + rect.width;
+    if (rect.left + rect.width > unionRight)
+      unionRight = rect.left + rect.width;
     if (rect.top + rect.height > unionBottom)
       unionBottom = rect.top + rect.height;
     const sp = lens.computeShadowPad();
