@@ -557,16 +557,20 @@ const MERGE_BBOX_EXTRA_CSS = 30 + 10;
 /**
  * Merged-group copy: every lens in the group receives an identical
  * canvas sized to the group's padded union bbox, painted with the full
- * merged-blob render. We then clear the document-space rectangle of
- * every lens that precedes this one in DOM order, so the upper lens's
- * canvas is transparent over those areas and never paints over the
- * lower lens's children (text, badges, etc.) inside its stacking
- * context.
+ * merged-blob render.
  *
  * Bridge pixels (between two non-overlapping rects) live inside the
- * union bbox but outside any single lens rect, so they are never
- * cleared and remain visible on whichever canvas is on top — the merged
- * shape now reads as one continuous blob across all member lenses.
+ * union bbox but outside any single lens rect and therefore remain
+ * visible on all member canvases.
+ *
+ * Historical note:
+ * We used to clear prior DOM-order lens rectangles from upper canvases
+ * to prevent them overpainting lower lenses' DOM content when each
+ * public canvas was a child of its lens element. After migrating public
+ * canvases into renderer-level fixed hosts (below lens DOM), that clear
+ * pass is no longer required and can introduce visible hard-edged
+ * cutouts during merge animation (rectangular seams). So merged copies
+ * now keep the full rendered blob untouched.
  */
 function copyMergedGroupToPublicCanvases(
   renderer: AqualensRenderer,
@@ -605,16 +609,6 @@ function copyMergedGroupToPublicCanvases(
   const unionWidth = unionRight - unionLeft;
   const unionHeight = unionBottom - unionTop;
 
-  // Sort by DOM order so we know which lenses paint underneath this
-  // one and need to be cleared from the upper canvas. Items earlier in
-  // the sorted array paint first.
-  const sortedByDom = lenses.slice().sort((a, b) => {
-    const cmp = a.element.compareDocumentPosition(b.element);
-    if (cmp & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-    if (cmp & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-    return 0;
-  });
-
   // Source-rect clamp on the WebGL canvas, computed once per group.
   const sx = Math.round((unionLeft + overscrollX) * dpr);
   const sy = Math.round((unionTop + overscrollY) * dpr);
@@ -630,8 +624,8 @@ function copyMergedGroupToPublicCanvases(
   const dstX = srcX - sx;
   const dstY = srcY - sy;
 
-  for (let i = 0; i < sortedByDom.length; i++) {
-    const lens = sortedByDom[i];
+  for (let i = 0; i < lenses.length; i++) {
+    const lens = lenses[i];
     const rect = lens.rectPx;
     if (!rect || rect.width <= 0 || rect.height <= 0) continue;
 
@@ -665,38 +659,29 @@ function copyMergedGroupToPublicCanvases(
         // Source canvas momentarily invalid — let the next frame retry.
       }
     }
-
-    // Erase rectangles of lenses that precede this one in DOM order.
-    // Without this step the upper lens's canvas would paint the merged
-    // blob (and shadow) on top of every prior lens's stacking context,
-    // hiding their children. Clearing makes those areas fully
-    // transparent on the upper canvas so the prior lens's own canvas
-    // and DOM content show through naturally.
-    for (let j = 0; j < i; j++) {
-      const prior = sortedByDom[j];
-      const priorRect = prior.rectPx;
-      if (!priorRect || priorRect.width <= 0 || priorRect.height <= 0) continue;
-      const cx = (priorRect.left - unionLeft) * dpr;
-      const cy = (priorRect.top - unionTop) * dpr;
-      const cw = priorRect.width * dpr;
-      const ch = priorRect.height * dpr;
-      ctx.clearRect(cx, cy, cw, ch);
-    }
   }
 }
 
 /**
  * For every lens in a freshly-rendered group, copy the relevant region
  * of the private WebGL canvas into the lens's `publicCanvas` (a 2D
- * canvas sitting inside the lens DOM). After this call returns, the
+ * canvas living inside the renderer's per-stackingIndex host container,
+ * positioned at viewport coordinates). After this call returns, the
  * user sees the new pixels.
  *
  * Single-lens groups use the lens's own rect + shadowPad as the canvas
  * region. Multi-lens (merged) groups share the same padded union bbox
- * across all lenses' canvases, plus a per-canvas clear-pass that
- * subtracts the rectangles of DOM-earlier siblings so the upper lens
- * never overpaints lower lenses' children inside their stacking
- * contexts.
+ * across all lenses' canvases.
+ *
+ * Because every public canvas is hosted in a viewport-fixed container
+ * rather than as a child of its lens element, the canvases of a merged
+ * group always remain pixel-aligned with each other regardless of how
+ * the underlying lens hosts are animated. This eliminates the "seam /
+ * doubled silhouette" artifact that used to appear during scroll when
+ * one merged lens was driven by a CSS scroll-driven animation
+ * (`animation-timeline: scroll(...)`) while another was static — the
+ * canvases would otherwise drift apart in viewport space between
+ * renders.
  */
 export function copyLensRegionsToPublicCanvases(
   renderer: AqualensRenderer,

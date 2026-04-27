@@ -27,35 +27,73 @@ export class AqualensLens implements AqualensLensInstance {
   shadowParams: ShadowParams | null = null;
 
   /**
-   * The public `<canvas>` element appended into the lens DOM as the very
-   * first child. WebGL renders into the renderer's offscreen private canvas
-   * and the relevant region is then copied here via `drawImage`. Because
-   * this canvas lives **inside** the lens, the lens's own DOM content
-   * paints naturally on top of it (CSS stacking) and is therefore never
-   * picked up by WebGL refraction.
+   * The public `<canvas>` element decorating this lens. WebGL renders
+   * into the renderer's offscreen private canvas and the relevant region
+   * is then copied here via `drawImage`.
+   *
+   * **Crucial layout detail** — this canvas does NOT live inside
+   * `lens.element`. Instead it sits in a per-stackingIndex host container
+   * (`<div data-aqualens-host>`) that is `position: fixed; inset: 0` on
+   * `document.body`. The canvas itself uses `position: absolute` with
+   * top/left/width/height in **viewport CSS pixels**, fully independent
+   * of the lens host element's own positioning, transform or CSS
+   * animations.
+   *
+   * This decoupling fixes a class of merge-mode artifacts ("seams" /
+   * "doubled silhouettes") that occurred whenever lenses in the same
+   * merged group were animated/positioned independently between render
+   * frames: when the canvas was a child of the lens, parent transforms
+   * (scroll-driven animations, `transform: translate(-50%, -50%)` etc.)
+   * would shift the canvas relative to the rendered blob, while sibling
+   * canvases remained in place. Hosting in a fixed container makes
+   * canvas screen position depend only on what we explicitly set during
+   * `_syncPublicCanvasForRegion`.
+   *
+   * Stacking semantics (so lens DOM children still paint above the glass
+   * effect): each host is itself at body level with `z-index =
+   * stackingIndex`, and each lens host element gets the same
+   * `stackingIndex` (via `_syncStackingZIndex`). At equal z-index, tree
+   * order resolves the layering — and we deliberately keep the host
+   * appended BEFORE lens elements through `addLens` ordering guarantees,
+   * which puts the host (and its canvases) below the lens stacking
+   * context. For implicit (no stackingIndex) lenses both the host and
+   * the lens stay at default z-index, so they participate in the
+   * surrounding flow stacking via tree order alone.
    */
   publicCanvas: HTMLCanvasElement;
   publicCtx: CanvasRenderingContext2D;
+  /** Stacking key this canvas was last attached to (used to migrate hosts). */
+  private _canvasHostStackingIndex: number | undefined;
+  /**
+   * Whether we installed `isolation: isolate` on the lens host element.
+   * The canvas itself no longer needs it (it lives in the renderer's
+   * fixed-position host container, see `publicCanvas` above), but the
+   * startup-fallback DOM does: the fallback glare uses an extreme
+   * `z-index` to stay above all lens content, which would otherwise leak
+   * past the lens and overlay neighbouring stacking contexts.
+   */
+  private _isolationApplied = false;
   /** Public canvas backing-store dimensions, in device pixels. */
   publicCanvasW = 0;
   publicCanvasH = 0;
   /**
-   * CSS-pixel offset of the public canvas top-left relative to the lens
-   * element's top-left. Negative values mean the canvas extends above /
-   * to the left of the lens element (used to host shadow padding and the
-   * shared-merge bbox that may extend beyond an individual lens's rect).
+   * CSS-pixel viewport-space top-left of the public canvas. Drives the
+   * canvas's inline `left` / `top` styles directly: because the host
+   * container is a `position: fixed; inset: 0` div, an `absolute`
+   * positioned canvas inside it places its origin at the host's
+   * top-left, which equals the visual viewport's top-left.
    */
-  publicCanvasOffsetLeft = 0;
-  publicCanvasOffsetTop = 0;
+  publicCanvasViewportLeft = 0;
+  publicCanvasViewportTop = 0;
   /** CSS-pixel size the canvas currently occupies. */
   publicCanvasCssWidth = 0;
   publicCanvasCssHeight = 0;
-  /** Whether we installed `isolation: isolate` (so destroy() can revert it). */
-  private _isolationApplied = false;
   /** Whether we overrode element `z-index` from `stackingIndex`. */
   private _stackingZApplied = false;
   /** Original inline z-index before we started syncing to stackingIndex. */
   private _savedZIndexInline = "";
+  /** Last z-index value we wrote to avoid per-frame redundant writes. */
+  private _lastAppliedZIndex: string | null = null;
 
   /**
    * Shadow copy of the user's last-known non-important inline
@@ -162,34 +200,42 @@ export class AqualensLens implements AqualensLensInstance {
     // edges and double-tint anything inside the SDF shape.
     this._applyOverride();
     this._updateTintFromCss();
-    this._syncStackingZIndex();
 
-    // Build the per-lens public canvas. It is positioned absolute and
-    // covers the full lens rect (including shadowPad on every side) so
-    // glass refraction, glare and box-shadow all fit inside it.
+    // Build the per-lens public canvas. The canvas is `position: absolute`
+    // inside a viewport-fixed host container (see `publicCanvas` doc
+    // comment for the rationale): top/left/width/height in inline style
+    // are interpreted in CSS pixels of the visual viewport.
     //
-    // CRITICAL: `z-index: -1` puts the canvas BEHIND the lens's DOM
-    // content. Without it, the canvas (positioned, painting group 6)
-    // would paint OVER any in-flow children of the lens (painting
-    // group 3) and obscure them. To make sure `z-index: -1` stays
-    // contained inside the lens (and doesn't bleed below the lens's
-    // own background), we also force the lens itself to establish a
-    // stacking context via `isolation: isolate`.
+    // Stacking-context handling: with the canvas no longer inside the
+    // lens DOM, the lens itself doesn't need `isolation: isolate` for
+    // canvas-vs-content layering — that's handled at body level via
+    // matching `z-index` between host and lens (see `_syncStackingZIndex`).
     this.publicCanvas = document.createElement("canvas");
     this.publicCanvas.setAttribute("data-aqualens-canvas", "");
     this.publicCanvas.setAttribute("data-liquid-ignore", "");
     this.publicCanvas.style.cssText =
-      "position:absolute;pointer-events:none;left:0;top:0;width:100%;height:100%;z-index:-1;";
+      "position:absolute;pointer-events:none;left:0;top:0;width:0;height:0;";
     const ctx = this.publicCanvas.getContext("2d");
     if (!ctx) {
       throw new Error("Aqualens: 2D canvas context unavailable");
     }
     this.publicCtx = ctx;
-    if (this.element.firstChild) {
-      this.element.insertBefore(this.publicCanvas, this.element.firstChild);
-    } else {
-      this.element.appendChild(this.publicCanvas);
-    }
+    this._canvasHostStackingIndex = this.options.stackingIndex;
+    this.renderer
+      ._acquireCanvasHost(this._canvasHostStackingIndex)
+      .appendChild(this.publicCanvas);
+
+    // Sync host z-index AFTER the canvas DOM node exists: the migration
+    // path inside `_syncStackingZIndex` may try to re-parent the canvas,
+    // which would throw on an undefined publicCanvas if called earlier
+    // in the constructor.
+    this._syncStackingZIndex();
+
+    // Force a stacking context on the lens DOM so the startup-fallback
+    // glare's `z-index: 2147483647` can't escape to ancestor stacking and
+    // overlay neighbouring lenses. The public canvas itself doesn't need
+    // this any more (it's hosted outside the lens DOM), but the fallback
+    // overlay nodes are still children of `lens.element`.
     if (!this.element.style.isolation) {
       this.element.style.isolation = "isolate";
       this._isolationApplied = true;
@@ -507,12 +553,12 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Resize the public canvas to host a given viewport-CSS-pixel region.
-   * The region is expressed in the same coordinate space as
-   * `getBoundingClientRect()` (top-left of the visual viewport). The
-   * canvas is positioned absolutely inside the lens with negative offsets
-   * when the region extends beyond the lens's rect (typical for both
-   * shadow padding and merged-group union bboxes).
+   * Resize and reposition the public canvas to match a given viewport
+   * region (in CSS pixels relative to the visual viewport's top-left).
+   * Because the canvas lives in a `position: fixed; inset: 0` host
+   * container and is itself `position: absolute`, the region's
+   * `left/top` map directly to the canvas's inline `left/top` styles —
+   * no parent-relative offset arithmetic is needed.
    *
    * Callers:
    *  - single-lens path: lens rect ± shadowPad (see {@link _syncPublicCanvasSize});
@@ -543,18 +589,16 @@ export class AqualensLens implements AqualensLensInstance {
       return;
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const offsetLeft = regionLeft - rect.left;
-    const offsetTop = regionTop - rect.top;
     const backingWidth = Math.max(1, Math.ceil(regionWidth * dpr));
     const backingHeight = Math.max(1, Math.ceil(regionHeight * dpr));
 
-    if (offsetLeft !== this.publicCanvasOffsetLeft) {
-      this.publicCanvas.style.left = `${offsetLeft}px`;
-      this.publicCanvasOffsetLeft = offsetLeft;
+    if (regionLeft !== this.publicCanvasViewportLeft) {
+      this.publicCanvas.style.left = `${regionLeft}px`;
+      this.publicCanvasViewportLeft = regionLeft;
     }
-    if (offsetTop !== this.publicCanvasOffsetTop) {
-      this.publicCanvas.style.top = `${offsetTop}px`;
-      this.publicCanvasOffsetTop = offsetTop;
+    if (regionTop !== this.publicCanvasViewportTop) {
+      this.publicCanvas.style.top = `${regionTop}px`;
+      this.publicCanvasViewportTop = regionTop;
     }
     if (regionWidth !== this.publicCanvasCssWidth) {
       this.publicCanvas.style.width = `${regionWidth}px`;
@@ -613,15 +657,18 @@ export class AqualensLens implements AqualensLensInstance {
   }
 
   /**
-   * Keep DOM stacking order in sync with `stackingIndex` so per-lens public
-   * canvases layer exactly like the renderer's group ordering.
+   * Keep three things in sync with the lens's current `stackingIndex`:
    *
-   * Why this is needed:
-   * - With per-lens canvases, final visible order is CSS stacking order of
-   *   lens elements.
-   * - Renderer cascade order is based on `stackingIndex`.
-   * - If those two differ, you can get a physically correct cascade in the
-   *   texture pipeline but a visually wrong overlap (upper lens appears below).
+   *   1. The lens DOM element's CSS `z-index` (so cascade ordering with
+   *      surrounding non-lens DOM works).
+   *   2. The CSS `z-index` of the lens's host container (so canvases of
+   *      different stacking groups layer correctly at body level).
+   *   3. The host parent the canvas lives under (the renderer maintains
+   *      one host per unique stacking key — see
+   *      `_acquireCanvasHost`/`_releaseCanvasHost`). When stackingIndex
+   *      changes (e.g. a `mergeLens` toggle in the demo), we migrate the
+   *      canvas to the host of the new key and release the old host's
+   *      refcount so it can be torn down if no canvases reference it.
    */
   private _syncStackingZIndex(): void {
     const si = this.options.stackingIndex;
@@ -630,18 +677,43 @@ export class AqualensLens implements AqualensLensInstance {
         this._savedZIndexInline = this.element.style.zIndex;
         this._stackingZApplied = true;
       }
-      this.element.style.zIndex = String(si);
-      return;
+      // Host uses `si * 2`, lens DOM uses `si * 2 + 1` so lens content
+      // always paints above glass canvas for the same stacking group.
+      const nextZIndex = String(si * 2 + 1);
+      if (this._lastAppliedZIndex !== nextZIndex) {
+        this.element.style.zIndex = nextZIndex;
+        this._lastAppliedZIndex = nextZIndex;
+      }
+    } else if (this._stackingZApplied) {
+      if (this._savedZIndexInline === "") {
+        this.element.style.removeProperty("z-index");
+        this._lastAppliedZIndex = "";
+      } else {
+        if (this._lastAppliedZIndex !== this._savedZIndexInline) {
+          this.element.style.zIndex = this._savedZIndexInline;
+          this._lastAppliedZIndex = this._savedZIndexInline;
+        }
+      }
+      this._stackingZApplied = false;
+      this._savedZIndexInline = "";
     }
 
-    if (!this._stackingZApplied) return;
-    if (this._savedZIndexInline === "") {
-      this.element.style.removeProperty("z-index");
-    } else {
-      this.element.style.zIndex = this._savedZIndexInline;
+    // Migrate the canvas to the host that matches the current stacking
+    // key. This is the second half of stackingIndex syncing — without it
+    // a lens that switches groups (e.g. `mergeLens` toggled at runtime)
+    // would keep its old host's z-index and either lose cascade ordering
+    // or remain merged with the wrong group.
+    if (si !== this._canvasHostStackingIndex) {
+      const previousIndex = this._canvasHostStackingIndex;
+      const nextHost = this.renderer._acquireCanvasHost(si);
+      // Move the existing canvas DOM node to the new host before
+      // releasing the old host's refcount: that way we never end up in
+      // a transient state where the canvas is detached, which would
+      // make `drawImage` paths see a 0×0 backing buffer.
+      nextHost.appendChild(this.publicCanvas);
+      this._canvasHostStackingIndex = si;
+      this.renderer._releaseCanvasHost(previousIndex);
     }
-    this._stackingZApplied = false;
-    this._savedZIndexInline = "";
   }
 
   /**
@@ -771,11 +843,17 @@ export class AqualensLens implements AqualensLensInstance {
     const CSS_BLUR_SCALE = 1 / 6;
     const parts: string[] = [];
     if (this.options.blurRadius > 0) {
-      parts.push(`blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`);
+      parts.push(
+        `blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`,
+      );
     }
     parts.push("saturate(1.2)", "brightness(1.05)");
     const backdropFilter = parts.join(" ");
-    this.element.style.setProperty("backdrop-filter", backdropFilter, "important");
+    this.element.style.setProperty(
+      "backdrop-filter",
+      backdropFilter,
+      "important",
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (this.element.style as any).setProperty(
       "-webkit-backdrop-filter",
@@ -895,6 +973,7 @@ export class AqualensLens implements AqualensLensInstance {
     }
 
     this.publicCanvas.remove();
+    this.renderer._releaseCanvasHost(this._canvasHostStackingIndex);
     this.element.removeAttribute(LENS_DOM_ATTR);
     this.element.style.removeProperty("backdrop-filter");
     this.element.style.removeProperty("-webkit-backdrop-filter");
@@ -903,8 +982,10 @@ export class AqualensLens implements AqualensLensInstance {
     if (this._stackingZApplied) {
       if (this._savedZIndexInline === "") {
         this.element.style.removeProperty("z-index");
+        this._lastAppliedZIndex = "";
       } else {
         this.element.style.zIndex = this._savedZIndexInline;
+        this._lastAppliedZIndex = this._savedZIndexInline;
       }
       this._stackingZApplied = false;
       this._savedZIndexInline = "";

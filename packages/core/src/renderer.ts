@@ -101,13 +101,40 @@ export interface SnapshotSourceConfig {
   sourceTextureSize?: SnapshotSourceTextureSize | null;
 }
 
+/**
+ * Sentinel key used in `_canvasHosts` for lenses without an explicit
+ * `stackingIndex`. Implicit lenses share a single host with default
+ * stacking (no z-index set, so they layer naturally with surrounding
+ * non-lens DOM by tree order).
+ */
+const IMPLICIT_HOST_KEY = "__implicit__";
+
+/**
+ * Build a CSS rule string for a lens-canvas host container. Each host
+ * fills the visual viewport via `position: fixed; inset: 0` so the
+ * canvases inside it can be positioned at viewport coordinates with
+ * `position: absolute; left/top` directly. The host is `pointer-events:
+ * none` so it never intercepts pointer interaction with the page below.
+ *
+ * `isolation: isolate` is intentionally NOT used: that would form a
+ * stacking context for the host, which would force every canvas inside
+ * to live BELOW any lens DOM at the same z-index regardless of tree
+ * order. Without isolation, canvases inside the host participate in the
+ * outer (body) stacking context directly, allowing per-canvas
+ * z-indexing that interleaves correctly with lens elements (which are
+ * also at body level w.r.t. our renderer).
+ */
+const HOST_BASE_CSS =
+  "position:fixed;inset:0;pointer-events:none;contain:layout style;";
+
 export class AqualensRenderer implements AqualensRendererInstance {
   /**
    * Private offscreen canvas hosting the WebGL2 context. NOT inserted into
-   * the DOM — the only thing the user ever sees is each lens's own
-   * `publicCanvas` (a child of the lens DOM element). After each lens
-   * group is rendered into this private canvas, the relevant regions are
-   * copied into the corresponding public canvases via `drawImage`.
+   * the DOM — the only things the user ever sees are the per-lens public
+   * canvases that live inside the renderer's `_canvasHosts` containers.
+   * After each lens group is rendered into this private canvas, the
+   * relevant regions are copied into the corresponding public canvases
+   * via `drawImage`.
    *
    * Keeping the private canvas at full viewport size lets the
    * `renderer-draw` viewport code keep using `canvas.height` for
@@ -246,6 +273,37 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _revealDiscoveryScheduled = false;
   _revealMaskedProgram!: WebGLProgram;
   _revealMaskedU!: RevealMaskedUniforms;
+
+  /**
+   * Containers that host the per-lens public canvases, one per unique
+   * `stackingIndex` value (plus a single shared container for implicit
+   * lenses keyed by {@link IMPLICIT_HOST_KEY}). Each container is a
+   * `position: fixed; inset: 0` div appended to `document.body`, so
+   * canvases inside it can be positioned at **viewport coordinates**
+   * directly via `top/left/width/height`.
+   *
+   * Why this design exists (the "merge drift" bug it fixes): in earlier
+   * versions each lens's public canvas was a child of the lens DOM
+   * element. When two lenses merged into a single rendered blob, both
+   * canvases stored the SAME blob image but were positioned relative to
+   * their own host element. If one of those host elements moved
+   * independently between renders (e.g. a CSS scroll-driven animation
+   * shifting a `position: fixed` lens, or a transform animation), the
+   * two canvases would drift apart in viewport space — producing the
+   * visible "seams / doubled silhouettes" artifact during scroll.
+   *
+   * Hosting all canvases in a viewport-fixed container makes their
+   * absolute screen positions independent of the lens element they
+   * decorate, guaranteeing pixel-perfect alignment across the merged
+   * blob no matter how the lenses themselves are animated.
+   */
+  _canvasHosts = new Map<string, HTMLDivElement>();
+  /**
+   * Canvas count per host, keyed identically to `_canvasHosts`. We keep
+   * an explicit count so a host can be torn down as soon as its last
+   * canvas is removed (lens.destroy or stackingIndex reassignment).
+   */
+  _canvasHostCounts = new Map<string, number>();
 
   constructor(
     snapshotTarget: HTMLElement,
@@ -1005,6 +1063,76 @@ export class AqualensRenderer implements AqualensRendererInstance {
   }
 
   // ------------------------------------------------------------------
+  //  Canvas host lifecycle
+  // ------------------------------------------------------------------
+
+  /**
+   * Build the `stackingIndex`-based key used to look up a lens's host in
+   * {@link _canvasHosts}. Returns the string form of the numeric
+   * stackingIndex for explicit lenses, or {@link IMPLICIT_HOST_KEY} when
+   * `stackingIndex` is undefined.
+   */
+  _stackingHostKey(stackingIndex: number | undefined): string {
+    return stackingIndex === undefined ? IMPLICIT_HOST_KEY : String(stackingIndex);
+  }
+
+  /**
+   * Lazily create (or return) the host container that owns canvases for
+   * the given stacking key. The host is appended to `document.body` so
+   * `position: fixed` resolves against the visual viewport regardless of
+   * any transformed ancestors a lens element might have.
+   *
+   * `z-index` of the host is taken from the lens's `stackingIndex` (so
+   * cascade ordering between groups still works at the body stacking
+   * level). For implicit lenses, no `z-index` is set so they layer with
+   * surrounding non-lens DOM by tree order, matching the implicit-lens
+   * single-group semantics established in {@link render}.
+   */
+  _acquireCanvasHost(stackingIndex: number | undefined): HTMLDivElement {
+    const key = this._stackingHostKey(stackingIndex);
+    let host = this._canvasHosts.get(key);
+    if (!host) {
+      host = document.createElement("div");
+      host.setAttribute("data-aqualens-host", "");
+      host.setAttribute("data-liquid-ignore", "");
+      let css = HOST_BASE_CSS;
+      if (stackingIndex !== undefined) {
+        // Keep host one layer below lens DOM at the same stackingIndex.
+        // Lens element itself is synced to `stackingIndex * 2 + 1` in
+        // `AqualensLens._syncStackingZIndex`, while host sits at
+        // `stackingIndex * 2`.
+        css += `z-index:${stackingIndex * 2};`;
+      }
+      host.style.cssText = css;
+      document.body.appendChild(host);
+      this._canvasHosts.set(key, host);
+      this._canvasHostCounts.set(key, 0);
+    }
+    this._canvasHostCounts.set(key, (this._canvasHostCounts.get(key) || 0) + 1);
+    return host;
+  }
+
+  /**
+   * Decrement the refcount for the host owning `stackingIndex` and tear
+   * the host down once no canvases reference it any more. Called from
+   * `lens.destroy()` and when a lens migrates between hosts (see
+   * `lens._syncStackingZIndex`).
+   */
+  _releaseCanvasHost(stackingIndex: number | undefined): void {
+    const key = this._stackingHostKey(stackingIndex);
+    const count = this._canvasHostCounts.get(key);
+    if (count === undefined) return;
+    if (count <= 1) {
+      const host = this._canvasHosts.get(key);
+      if (host && host.parentNode) host.parentNode.removeChild(host);
+      this._canvasHosts.delete(key);
+      this._canvasHostCounts.delete(key);
+      return;
+    }
+    this._canvasHostCounts.set(key, count - 1);
+  }
+
+  // ------------------------------------------------------------------
   //  Public API
   // ------------------------------------------------------------------
 
@@ -1158,6 +1286,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this.gl.deleteTexture(this._lensContentTex);
       this._lensContentTex = null;
     }
+    for (const host of this._canvasHosts.values()) {
+      if (host.parentNode) host.parentNode.removeChild(host);
+    }
+    this._canvasHosts.clear();
+    this._canvasHostCounts.clear();
     const styleElement = document.getElementById("liquid-gl-dynamic-styles");
     styleElement?.remove();
   }
