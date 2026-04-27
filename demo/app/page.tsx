@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Aqualens } from "@aqualens/react";
 import {
   GlassControls,
@@ -32,6 +32,9 @@ export default function DemoPage() {
   const [powerSave, setPowerSave] = useState(false);
   const [mergeLens, setMergeLens] = useState(false);
   const [opaqueOverlap, setOpaqueOverlap] = useState(false);
+  useState<HTMLVideoElement | null>(null);
+  const [fourthScreenSourceTexture, setFourthScreenSourceTexture] =
+    useState<HTMLVideoElement | null>(null);
   const [glassSettings, setGlassSettings] = useState<GlassSettings>(
     DEFAULT_GLASS_SETTINGS,
   );
@@ -146,6 +149,7 @@ export default function DemoPage() {
             muted
             playsInline
             className="absolute inset-0 object-cover w-full h-full rounded-3xl"
+            ref={setFourthScreenSourceTexture}
           />
           <Aqualens
             className="absolute inset-[50%] translate-x-[-50%] translate-y-[-50%] shadow-lg z-10 w-80 h-80 rounded-4xl bg-black/50"
@@ -169,6 +173,7 @@ export default function DemoPage() {
             blurRadius={10}
             blurEdge
             powerSave={powerSave}
+            sourceTexture={fourthScreenSourceTexture}
             stackingIndex={1}
           >
             <div className="p-8 h-full flex flex-col items-start justify-between text-white">

@@ -544,6 +544,7 @@ function copySingleLensRegionToPublicCanvas(
       srcW,
       srcH,
     );
+    lens._disableStartupFallback();
   } catch {
     // Source/destination canvas was zero-sized or otherwise invalid —
     // skip silently and let the next frame retry.
@@ -659,6 +660,7 @@ function copyMergedGroupToPublicCanvases(
           srcW,
           srcH,
         );
+        lens._disableStartupFallback();
       } catch {
         // Source canvas momentarily invalid — let the next frame retry.
       }

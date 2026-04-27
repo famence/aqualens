@@ -22,6 +22,9 @@ import {
   type PowerSaveRenderer,
   type RefractionOptions,
   type GlareOptions,
+  type SnapshotSourceElement,
+  type SnapshotSourceTexture,
+  type SnapshotSourceTextureSize,
 } from "@aqualens/core";
 
 interface AqualensOwnProps {
@@ -30,6 +33,12 @@ interface AqualensOwnProps {
   snapshotTarget?: HTMLElement | null;
   /** Render resolution multiplier (0.1–3.0). @default 2.0 */
   resolution?: number;
+  /** Optional known source element used instead of html2canvas. */
+  sourceElement?: SnapshotSourceElement | null;
+  /** Optional texture source uploaded directly to WebGL. */
+  sourceTexture?: SnapshotSourceTexture | null;
+  /** Optional explicit size for `sourceTexture`. */
+  sourceTextureSize?: SnapshotSourceTextureSize;
 
   /** Refraction (distortion) parameters. */
   refraction?: RefractionOptions;
@@ -141,6 +150,9 @@ const AqualensInner = <C extends React.ElementType = "div">(
     children,
     snapshotTarget,
     resolution,
+    sourceElement,
+    sourceTexture,
+    sourceTextureSize,
     refraction,
     glare,
     blurRadius,
@@ -159,6 +171,7 @@ const AqualensInner = <C extends React.ElementType = "div">(
 ) => {
   const stableRefraction = useShallowMemo(refraction);
   const stableGlare = useShallowMemo(glare);
+  const stableSourceTextureSize = useShallowMemo(sourceTextureSize);
 
   const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
   const rendererRef = useRef<AqualensRenderer | null>(null);
@@ -211,11 +224,23 @@ const AqualensInner = <C extends React.ElementType = "div">(
     const resolutionValue = resolution ?? undefined;
 
     if (rendererRef.current) {
-      updateSharedRendererConfig(snapshotTarget ?? null, resolution);
+      updateSharedRendererConfig(
+        snapshotTarget ?? null,
+        resolution,
+        sourceElement,
+        sourceTexture,
+        stableSourceTextureSize,
+      );
       return;
     }
 
-    getSharedRenderer(target ?? null, resolutionValue).then(
+    getSharedRenderer(
+      target ?? null,
+      resolutionValue,
+      sourceElement,
+      sourceTexture,
+      stableSourceTextureSize,
+    ).then(
       (rendererInstance: AqualensRenderer) => {
         if (cancelled) return;
         rendererRef.current = rendererInstance;
@@ -225,7 +250,14 @@ const AqualensInner = <C extends React.ElementType = "div">(
     return () => {
       cancelled = true;
     };
-  }, [snapshotTarget, resolution, powerSave]);
+  }, [
+    snapshotTarget,
+    resolution,
+    sourceElement,
+    sourceTexture,
+    stableSourceTextureSize,
+    powerSave,
+  ]);
 
   useEffect(() => {
     if (powerSave || !renderer) return;

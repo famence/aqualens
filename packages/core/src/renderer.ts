@@ -8,7 +8,13 @@ import {
   REVEAL_MASKED_FRAGMENT,
 } from "./shaders";
 import { debounce } from "./utils";
-import type { AqualensConfig, AqualensRendererInstance } from "./types";
+import type {
+  AqualensConfig,
+  AqualensRendererInstance,
+  SnapshotSourceElement,
+  SnapshotSourceTexture,
+  SnapshotSourceTextureSize,
+} from "./types";
 import { AqualensLens } from "./lens";
 import {
   createProgramGL2,
@@ -89,6 +95,12 @@ html:not([data-liquid-power-save="true"]) ${REVEAL_CSS_SELECTOR} {
 }
 `;
 
+export interface SnapshotSourceConfig {
+  sourceElement?: SnapshotSourceElement | null;
+  sourceTexture?: SnapshotSourceTexture | null;
+  sourceTextureSize?: SnapshotSourceTextureSize | null;
+}
+
 export class AqualensRenderer implements AqualensRendererInstance {
   /**
    * Private offscreen canvas hosting the WebGL2 context. NOT inserted into
@@ -114,6 +126,14 @@ export class AqualensRenderer implements AqualensRendererInstance {
   textureWidth = 0;
   textureHeight = 0;
   scaleFactor = 1;
+  /** CSS-pixel offset of the currently uploaded texture region within snapshotTarget. */
+  textureOffsetX = 0;
+  textureOffsetY = 0;
+  /** Whether the current texture covers the entire snapshot target. */
+  hasFullSnapshot = false;
+  sourceElement: SnapshotSourceElement | null = null;
+  sourceTexture: SnapshotSourceTexture | null = null;
+  sourceTextureSize: SnapshotSourceTextureSize | null = null;
   useExternalTicker = false;
 
   _kawaseDownProgram!: WebGLProgram;
@@ -159,6 +179,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _scrollUpdateCounter = 0;
   _isScrolling = false;
   _capturing = false;
+  _fullSnapshotQueueId: number | null = null;
+  _fullSnapshotQueued = false;
   _snapshotResolution: number;
   snapshotTarget: HTMLElement;
   staticSnapshotCanvas: HTMLCanvasElement | null = null;
@@ -225,7 +247,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _revealMaskedProgram!: WebGLProgram;
   _revealMaskedU!: RevealMaskedUniforms;
 
-  constructor(snapshotTarget: HTMLElement, snapshotResolution = 1.0) {
+  constructor(
+    snapshotTarget: HTMLElement,
+    snapshotResolution = 1.0,
+    sourceConfig?: SnapshotSourceConfig,
+  ) {
     // Offscreen canvas: NOT appended to DOM. The only canvases the user
     // ever sees are the per-lens `publicCanvas` siblings created by
     // `AqualensLens`.
@@ -250,6 +276,9 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
     this.snapshotTarget = snapshotTarget;
     this._snapshotResolution = Math.max(0.1, Math.min(3.0, snapshotResolution));
+    this.sourceElement = sourceConfig?.sourceElement ?? null;
+    this.sourceTexture = sourceConfig?.sourceTexture ?? null;
+    this.sourceTextureSize = sourceConfig?.sourceTextureSize ?? null;
 
     let scrollTimeout: ReturnType<typeof setTimeout>;
     this._onScrollHandler = () => {
@@ -529,8 +558,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
       this._scrollUpdateCounter++;
     }
 
-    updateDynamicVideos(this);
-    updateDynamicNodes(this);
+    if (this.hasFullSnapshot) {
+      updateDynamicVideos(this);
+      updateDynamicNodes(this);
+    }
 
     updateBlurConfig(this);
     ensureBlurPyramid(this);
@@ -583,16 +614,18 @@ export class AqualensRenderer implements AqualensRendererInstance {
       lens.updateMetrics();
     }
 
-    const revealsActive = hasEligibleReveals(this);
+    const revealsActive = this.hasFullSnapshot && hasEligibleReveals(this);
     if (revealsActive) triggerRevealCaptures(this);
-    const underLensRevealsActive = hasEligibleUnderLensReveals(this);
+    const underLensRevealsActive =
+      this.hasFullSnapshot && hasEligibleUnderLensReveals(this);
 
     // Compose FBO is needed when:
     //  - there are >1 stacking groups (cascade): later groups must sample
     //    the already-rendered earlier groups + their DOM content;
     //  - there are under-lens reveals: their captured pixels must be
     //    pre-baked into the source texture.
-    const useCompose = cascadeActive || underLensRevealsActive;
+    const useCompose =
+      this.hasFullSnapshot && (cascadeActive || underLensRevealsActive);
     this._revealComposited.clear();
 
     if (useCompose) {
@@ -1019,6 +1052,23 @@ export class AqualensRenderer implements AqualensRendererInstance {
     this._snapshotResolution = next;
   }
 
+  setSnapshotSource(config?: SnapshotSourceConfig): void {
+    const nextSourceElement = config?.sourceElement ?? null;
+    const nextSourceTexture = config?.sourceTexture ?? null;
+    const nextSourceTextureSize = config?.sourceTextureSize ?? null;
+    if (
+      this.sourceElement === nextSourceElement &&
+      this.sourceTexture === nextSourceTexture &&
+      this.sourceTextureSize?.width === nextSourceTextureSize?.width &&
+      this.sourceTextureSize?.height === nextSourceTextureSize?.height
+    ) {
+      return;
+    }
+    this.sourceElement = nextSourceElement;
+    this.sourceTexture = nextSourceTexture;
+    this.sourceTextureSize = nextSourceTextureSize;
+  }
+
   addDynamicElement(
     element: HTMLElement | HTMLElement[] | NodeList | string,
   ): void {
@@ -1076,6 +1126,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
   destroy(): void {
     this._destroyed = true;
     this.stopRenderLoop();
+    if (this._fullSnapshotQueueId !== null) {
+      cancelAnimationFrame(this._fullSnapshotQueueId);
+      this._fullSnapshotQueueId = null;
+    }
+    this._fullSnapshotQueued = false;
     window.removeEventListener("scroll", this._onScrollHandler);
     if (this._dynamicRemovalRaf) {
       cancelAnimationFrame(this._dynamicRemovalRaf);

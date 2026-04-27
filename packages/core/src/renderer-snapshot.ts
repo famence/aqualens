@@ -176,69 +176,202 @@ export async function captureSnapshotImpl(
   if (renderer._capturing) return false;
   renderer._capturing = true;
 
+  const maxTextureSize =
+    renderer.gl.getParameter(renderer.gl.MAX_TEXTURE_SIZE) || 8192;
+  const MAX_MOBILE_DIM = 4096;
+  const isMobileSafari = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  const computeScale = (cssWidth: number, cssHeight: number): number => {
+    let scale = Math.min(
+      renderer._snapshotResolution,
+      maxTextureSize / Math.max(cssWidth, 1),
+      maxTextureSize / Math.max(cssHeight, 1),
+    );
+    if (isMobileSafari) {
+      const over = (Math.max(cssWidth, cssHeight) * scale) / MAX_MOBILE_DIM;
+      if (over > 1) scale = scale / over;
+    }
+    return Math.max(0.1, scale);
+  };
+
+  const ignoreElementsFunc = (element: Element): boolean => {
+    if (!element || !("hasAttribute" in element)) return false;
+    const el = element as HTMLElement;
+    if (typeof el.closest === "function" && el.closest(`[${LENS_DOM_ATTR}]`)) {
+      return true;
+    }
+    const style = window.getComputedStyle(el);
+    if (style.position === "fixed") {
+      return true;
+    }
+    return !!(
+      el.hasAttribute("data-liquid-ignore") ||
+      (typeof el.closest === "function" && el.closest("[data-liquid-ignore]"))
+    );
+  };
+
+  const queueFullSnapshotCapture = (): void => {
+    if (renderer._destroyed || renderer._fullSnapshotQueued) return;
+    if (renderer.hasFullSnapshot) return;
+    renderer._fullSnapshotQueued = true;
+    const run = () => {
+      renderer._fullSnapshotQueueId = null;
+      renderer._fullSnapshotQueued = false;
+      if (renderer._destroyed || renderer.hasFullSnapshot) return;
+      void captureSnapshotImpl(renderer);
+    };
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback(() => run(), { timeout: 120 });
+      return;
+    }
+    renderer._fullSnapshotQueueId = requestAnimationFrame(run);
+  };
+
+  const captureFromSourceTexture = (): boolean => {
+    const textureSource = renderer.sourceTexture;
+    if (!textureSource) return false;
+    let width = 0;
+    let height = 0;
+    if ("width" in textureSource && typeof textureSource.width === "number") {
+      width = textureSource.width;
+    }
+    if ("height" in textureSource && typeof textureSource.height === "number") {
+      height = textureSource.height;
+    }
+    if (
+      (width <= 0 || height <= 0) &&
+      renderer.sourceTextureSize &&
+      renderer.sourceTextureSize.width > 0 &&
+      renderer.sourceTextureSize.height > 0
+    ) {
+      width = renderer.sourceTextureSize.width;
+      height = renderer.sourceTextureSize.height;
+    }
+    if (width <= 0 || height <= 0) return false;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+    ctx.drawImage(textureSource, 0, 0, width, height);
+    renderer.scaleFactor = 1;
+    uploadTexture(renderer, canvas, 0, 0, true);
+    return true;
+  };
+
+  const captureFromSourceElement = (): boolean => {
+    const source = renderer.sourceElement;
+    if (!source || !source.isConnected) return false;
+
+    const targetWidth = renderer.snapshotTarget.scrollWidth;
+    const targetHeight = renderer.snapshotTarget.scrollHeight;
+    if (targetWidth <= 0 || targetHeight <= 0) return false;
+
+    const scale = computeScale(targetWidth, targetHeight);
+    renderer.scaleFactor = scale;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(targetWidth * scale));
+    canvas.height = Math.max(1, Math.ceil(targetHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = renderer.snapshotTarget.getBoundingClientRect();
+    const drawX = (sourceRect.left - targetRect.left) * scale;
+    const drawY = (sourceRect.top - targetRect.top) * scale;
+    const drawW = sourceRect.width * scale;
+    const drawH = sourceRect.height * scale;
+    if (drawW <= 0 || drawH <= 0) return false;
+
+    ctx.drawImage(source, drawX, drawY, drawW, drawH);
+    uploadTexture(renderer, canvas, 0, 0, true);
+    return true;
+  };
+
+  const captureHtml2Canvas = async (
+    region: { x: number; y: number; width: number; height: number },
+    fullSnapshot: boolean,
+  ): Promise<boolean> => {
+    const scale = computeScale(region.width, region.height);
+    renderer.scaleFactor = scale;
+    const snapCanvas = await html2canvas(renderer.snapshotTarget, {
+      allowTaint: false,
+      useCORS: true,
+      backgroundColor: null,
+      removeContainer: true,
+      width: region.width,
+      height: region.height,
+      x: region.x,
+      y: region.y,
+      scrollX: 0,
+      scrollY: 0,
+      scale,
+      ignoreElements: ignoreElementsFunc,
+    });
+    uploadTexture(renderer, snapCanvas, region.x, region.y, fullSnapshot);
+    return true;
+  };
+
   const attemptCapture = async (
     attempt = 1,
     maxAttempts = 3,
     delayMs = 500,
   ): Promise<boolean> => {
     try {
+      if (renderer.sourceTexture && captureFromSourceTexture()) {
+        return true;
+      }
+      if (renderer.sourceElement && captureFromSourceElement()) {
+        return true;
+      }
+
       const fullWidth = renderer.snapshotTarget.scrollWidth;
       const fullHeight = renderer.snapshotTarget.scrollHeight;
-      const maxTextureSize =
-        renderer.gl.getParameter(renderer.gl.MAX_TEXTURE_SIZE) || 8192;
-      const MAX_MOBILE_DIM = 4096;
-      const isMobileSafari = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (fullWidth <= 0 || fullHeight <= 0) return false;
 
-      let scale = Math.min(
-        renderer._snapshotResolution,
-        maxTextureSize / fullWidth,
-        maxTextureSize / fullHeight,
-      );
+      const canUseViewportFirst =
+        !renderer.texture &&
+        Math.abs(window.scrollX) < 2 &&
+        Math.abs(window.scrollY) < 2 &&
+        Math.abs(window.visualViewport?.offsetLeft ?? 0) < 2 &&
+        Math.abs(window.visualViewport?.offsetTop ?? 0) < 2;
 
-      if (isMobileSafari) {
-        const over = (Math.max(fullWidth, fullHeight) * scale) / MAX_MOBILE_DIM;
-        if (over > 1) scale = scale / over;
-      }
-      renderer.scaleFactor = Math.max(0.1, scale);
-
-      const ignoreElementsFunc = (element: Element): boolean => {
-        if (!element || !("hasAttribute" in element)) return false;
-        const el = element as HTMLElement;
-        // The lens marker covers both the lens root and any descendant
-        // (its DOM content / overlays / public canvas). Refraction must
-        // sample what's BEHIND the lens, so the lens and its content
-        // must not appear in the source texture.
-        if (
-          typeof el.closest === "function" &&
-          el.closest(`[${LENS_DOM_ATTR}]`)
-        ) {
-          return true;
-        }
-        const style = window.getComputedStyle(el);
-        if (style.position === "fixed") {
-          return true;
-        }
-        return !!(
-          el.hasAttribute("data-liquid-ignore") ||
-          (typeof el.closest === "function" &&
-            el.closest("[data-liquid-ignore]"))
+      if (canUseViewportFirst) {
+        // Viewport-first capture for faster first paint: render immediately
+        // using only the visible region, then queue a full-page capture.
+        const vv = window.visualViewport;
+        const viewportWidth = Math.max(
+          1,
+          Math.floor(vv?.width ?? window.innerWidth),
         );
-      };
+        const viewportHeight = Math.max(
+          1,
+          Math.floor(vv?.height ?? window.innerHeight),
+        );
+        const snapRect = renderer.snapshotTarget.getBoundingClientRect();
+        const viewportX = Math.max(
+          0,
+          Math.floor((vv?.offsetLeft ?? 0) - snapRect.left),
+        );
+        const viewportY = Math.max(
+          0,
+          Math.floor((vv?.offsetTop ?? 0) - snapRect.top),
+        );
+        const region = {
+          x: Math.min(viewportX, Math.max(0, fullWidth - 1)),
+          y: Math.min(viewportY, Math.max(0, fullHeight - 1)),
+          width: Math.max(1, Math.min(viewportWidth, fullWidth - viewportX)),
+          height: Math.max(1, Math.min(viewportHeight, fullHeight - viewportY)),
+        };
+        await captureHtml2Canvas(region, false);
+        queueFullSnapshotCapture();
+        return true;
+      }
 
-      const snapCanvas = await html2canvas(renderer.snapshotTarget, {
-        allowTaint: false,
-        useCORS: true,
-        backgroundColor: null,
-        removeContainer: true,
-        width: fullWidth,
-        height: fullHeight,
-        scrollX: 0,
-        scrollY: 0,
-        scale: scale,
-        ignoreElements: ignoreElementsFunc,
-      });
-
-      uploadTexture(renderer, snapCanvas);
+      await captureHtml2Canvas(
+        { x: 0, y: 0, width: fullWidth, height: fullHeight },
+        true,
+      );
       return true;
     } catch (error) {
       console.error("aqualens snapshot failed on attempt " + attempt, error);
@@ -260,10 +393,16 @@ export async function captureSnapshotImpl(
 function uploadTexture(
   renderer: AqualensRenderer,
   srcCanvas: HTMLCanvasElement,
+  offsetX = 0,
+  offsetY = 0,
+  fullSnapshot = true,
 ): void {
   if (!srcCanvas) return;
   if (srcCanvas.width === 0 || srcCanvas.height === 0) return;
   renderer.staticSnapshotCanvas = srcCanvas;
+  renderer.textureOffsetX = offsetX;
+  renderer.textureOffsetY = offsetY;
+  renderer.hasFullSnapshot = fullSnapshot;
   const gl = renderer.gl;
   if (!renderer.texture) renderer.texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, renderer.texture);
@@ -286,7 +425,7 @@ function uploadTexture(
   renderer._textureVersion++;
 
   ensureBlurPyramid(renderer);
-  if (!renderer._fixedElementsDiscovered) {
+  if (!renderer._fixedElementsDiscovered && renderer.hasFullSnapshot) {
     if (typeof requestIdleCallback !== "undefined") {
       requestIdleCallback(() => discoverAndAddFixedElements(renderer), {
         timeout: 100,
@@ -296,12 +435,14 @@ function uploadTexture(
     }
   }
 
-  discoverReveals(renderer);
-  for (const reveal of renderer._revealNodes) {
-    reveal.needsRecapture = true;
-    reveal.capture = null;
+  if (renderer.hasFullSnapshot) {
+    discoverReveals(renderer);
+    for (const reveal of renderer._revealNodes) {
+      reveal.needsRecapture = true;
+      reveal.capture = null;
+    }
+    triggerRevealCaptures(renderer);
   }
-  triggerRevealCaptures(renderer);
 
   renderer.render();
 

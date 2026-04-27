@@ -47,6 +47,21 @@ export interface GlareOptions {
   angle?: number;
 }
 
+/** Explicit source element used to build the snapshot texture without html2canvas. */
+export type SnapshotSourceElement =
+  | HTMLImageElement
+  | HTMLVideoElement
+  | HTMLCanvasElement;
+
+/** Explicit source texture uploaded directly to WebGL (advanced mode). */
+export type SnapshotSourceTexture = CanvasImageSource;
+
+/** Pixel dimensions of {@link SnapshotSourceTexture} when they cannot be inferred reliably. */
+export interface SnapshotSourceTextureSize {
+  width: number;
+  height: number;
+}
+
 /**
  * User-facing options for creating a liquid glass effect.
  * By default, tint color is auto-computed from the element's CSS `background-color`.
@@ -56,6 +71,22 @@ export interface AqualensOptions {
   snapshot?: string;
   /** Render resolution multiplier (0.1–3.0). @default 2.0 */
   resolution?: number;
+  /**
+   * Optional known visual source that should be used as the snapshot texture
+   * instead of html2canvas. Useful for image/video/canvas-driven scenes where
+   * DOM rasterization is unnecessary.
+   */
+  sourceElement?: SnapshotSourceElement | null;
+  /**
+   * Optional texture source uploaded directly to WebGL. When provided, this
+   * takes precedence over `sourceElement`.
+   */
+  sourceTexture?: SnapshotSourceTexture | null;
+  /**
+   * Optional explicit size for `sourceTexture` when width/height cannot be
+   * inferred from the object itself.
+   */
+  sourceTextureSize?: SnapshotSourceTextureSize;
   /** Refraction (distortion) parameters. */
   refraction?: RefractionOptions;
   /** Glare (specular highlight) parameters. */

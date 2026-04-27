@@ -106,6 +106,10 @@ export class AqualensLens implements AqualensLensInstance {
   _contentCaptureDirty = true;
   _contentCapturing = false;
   _contentObserver: MutationObserver | null = null;
+  _startupFallbackActive = false;
+  _startupFallbackTint: HTMLDivElement | null = null;
+  _startupFallbackGlare: HTMLDivElement | null = null;
+  _startupPrevCanvasVisibility = "";
 
   constructor(
     renderer: AqualensRenderer,
@@ -193,6 +197,7 @@ export class AqualensLens implements AqualensLensInstance {
 
     this.updateMetrics();
     this._syncPublicCanvasSize();
+    this._enableStartupFallback();
 
     if (typeof ResizeObserver !== "undefined") {
       this._sizeObs = new ResizeObserver(() => {
@@ -757,6 +762,83 @@ export class AqualensLens implements AqualensLensInstance {
     this._triggerInit();
   }
 
+  _enableStartupFallback(): void {
+    if (this._startupFallbackActive) return;
+    this._startupFallbackActive = true;
+    this._startupPrevCanvasVisibility = this.publicCanvas.style.visibility;
+    this.publicCanvas.style.visibility = "hidden";
+
+    const CSS_BLUR_SCALE = 1 / 6;
+    const parts: string[] = [];
+    if (this.options.blurRadius > 0) {
+      parts.push(`blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`);
+    }
+    parts.push("saturate(1.2)", "brightness(1.05)");
+    const backdropFilter = parts.join(" ");
+    this.element.style.setProperty("backdrop-filter", backdropFilter, "important");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.element.style as any).setProperty(
+      "-webkit-backdrop-filter",
+      backdropFilter,
+      "important",
+    );
+
+    const tint = document.createElement("div");
+    tint.setAttribute("data-liquid-startup-fallback", "");
+    tint.style.cssText =
+      "position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;";
+    const tintColor = this.options.tint;
+    tint.style.background =
+      tintColor.a > 0
+        ? `rgba(${tintColor.r},${tintColor.g},${tintColor.b},${tintColor.a})`
+        : "transparent";
+    this.element.appendChild(tint);
+    this._startupFallbackTint = tint;
+
+    const glare = document.createElement("div");
+    glare.setAttribute("data-liquid-startup-fallback", "");
+    glare.style.cssText =
+      "position:absolute;inset:0;z-index:2147483647;pointer-events:none;border-radius:inherit;overflow:hidden;";
+    const glareOptions = this.options.glare;
+    const factor = glareOptions.factor / 100;
+    const oppFactor = glareOptions.oppositeFactor / 100;
+    const hardness = glareOptions.hardness / 100;
+    const convergence = glareOptions.convergence / 100;
+    const edgeWidth = Math.max(2, 8 * (1 - convergence));
+    const primaryAlpha = Math.min(0.35, factor * 0.35);
+    const oppositeAlpha = Math.min(0.2, oppFactor * primaryAlpha);
+    const fadeEnd = Math.min(20, edgeWidth + 6 * (1 - hardness));
+    glare.style.background = [
+      `linear-gradient(${glareOptions.angle}deg,`,
+      `rgba(255,255,255,${primaryAlpha.toFixed(3)}) 0%,`,
+      `rgba(255,255,255,0) ${fadeEnd.toFixed(1)}%,`,
+      `transparent 30%,`,
+      `transparent 70%,`,
+      `rgba(255,255,255,0) ${(100 - fadeEnd).toFixed(1)}%,`,
+      `rgba(255,255,255,${oppositeAlpha.toFixed(3)}) 100%)`,
+    ].join("");
+    glare.style.mixBlendMode = "overlay";
+    this.element.appendChild(glare);
+    this._startupFallbackGlare = glare;
+  }
+
+  _disableStartupFallback(): void {
+    if (!this._startupFallbackActive) return;
+    this._startupFallbackActive = false;
+    this._startupFallbackTint?.remove();
+    this._startupFallbackGlare?.remove();
+    this._startupFallbackTint = null;
+    this._startupFallbackGlare = null;
+    this.publicCanvas.style.visibility = this._startupPrevCanvasVisibility;
+    this.element.style.setProperty("backdrop-filter", "none", "important");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.element.style as any).setProperty(
+      "-webkit-backdrop-filter",
+      "none",
+      "important",
+    );
+  }
+
   private _triggerInit(): void {
     if (this._initCalled) return;
     this._initCalled = true;
@@ -771,6 +853,7 @@ export class AqualensLens implements AqualensLensInstance {
     this._attrObserver = null;
     this._contentObserver?.disconnect();
     this._contentObserver = null;
+    this._disableStartupFallback();
     this._contentCapture = null;
     this._activeStyleAnimations = 0;
     if (this._styleAnimationRaf !== null) {

@@ -181,8 +181,10 @@ function setMainViewportAndBounds(
   gl.uniform2f(renderer._mainU.resolution, viewportWidth, viewportHeight);
   const docX = left - snapRect.left;
   const docY = top - snapRect.top;
-  const leftUV = (docX * renderer.scaleFactor) / renderer.textureWidth;
-  const topUV = (docY * renderer.scaleFactor) / renderer.textureHeight;
+  const texX = (docX - renderer.textureOffsetX) * renderer.scaleFactor;
+  const texY = (docY - renderer.textureOffsetY) * renderer.scaleFactor;
+  const leftUV = texX / renderer.textureWidth;
+  const topUV = texY / renderer.textureHeight;
   const widthUV = (width * renderer.scaleFactor) / renderer.textureWidth;
   const heightUV = (height * renderer.scaleFactor) / renderer.textureHeight;
   gl.uniform4f(renderer._mainU.bounds, leftUV, topUV, widthUV, heightUV);
