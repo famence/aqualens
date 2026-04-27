@@ -92,8 +92,13 @@ export class AqualensLens implements AqualensLensInstance {
   private _stackingZApplied = false;
   /** Original inline z-index before we started syncing to stackingIndex. */
   private _savedZIndexInline = "";
-  /** Last z-index value we wrote to avoid per-frame redundant writes. */
-  private _lastAppliedZIndex: string | null = null;
+  /**
+   * Cached value of `element.style.zIndex` we last wrote, so the per-frame
+   * `_syncStackingZIndex` call doesn't keep poking the inline style on
+   * every render (which forces extra style recalcs during scroll-heavy
+   * sequences). `null` means "no override currently applied".
+   */
+  private _appliedZIndex: string | null = null;
 
   /**
    * Shadow copy of the user's last-known non-important inline
@@ -221,9 +226,10 @@ export class AqualensLens implements AqualensLensInstance {
     }
     this.publicCtx = ctx;
     this._canvasHostStackingIndex = this.options.stackingIndex;
-    this.renderer
-      ._acquireCanvasHost(this._canvasHostStackingIndex)
-      .appendChild(this.publicCanvas);
+    const host = this.renderer._acquireCanvasHost(
+      this._canvasHostStackingIndex,
+    );
+    host.appendChild(this.publicCanvas);
 
     // Sync host z-index AFTER the canvas DOM node exists: the migration
     // path inside `_syncStackingZIndex` may try to re-parent the canvas,
@@ -562,9 +568,9 @@ export class AqualensLens implements AqualensLensInstance {
    *
    * Callers:
    *  - single-lens path: lens rect ± shadowPad (see {@link _syncPublicCanvasSize});
-   *  - merged-group path: the group's padded union bbox (so every lens in
-   *    the group gets an identical-content canvas covering the whole
-   *    blob, with overlapping prior-DOM-order lens rects later cleared).
+   *  - merged-group path: the group's padded union bbox is applied to
+   *    one "primary" lens canvas; all secondary lenses in the group are
+   *    zeroed out via this same method (region 0,0,0,0).
    */
   _syncPublicCanvasForRegion(
     regionLeft: number,
@@ -679,23 +685,20 @@ export class AqualensLens implements AqualensLensInstance {
       }
       // Host uses `si * 2`, lens DOM uses `si * 2 + 1` so lens content
       // always paints above glass canvas for the same stacking group.
-      const nextZIndex = String(si * 2 + 1);
-      if (this._lastAppliedZIndex !== nextZIndex) {
-        this.element.style.zIndex = nextZIndex;
-        this._lastAppliedZIndex = nextZIndex;
+      const desired = String(si * 2 + 1);
+      if (this._appliedZIndex !== desired) {
+        this.element.style.zIndex = desired;
+        this._appliedZIndex = desired;
       }
     } else if (this._stackingZApplied) {
       if (this._savedZIndexInline === "") {
         this.element.style.removeProperty("z-index");
-        this._lastAppliedZIndex = "";
       } else {
-        if (this._lastAppliedZIndex !== this._savedZIndexInline) {
-          this.element.style.zIndex = this._savedZIndexInline;
-          this._lastAppliedZIndex = this._savedZIndexInline;
-        }
+        this.element.style.zIndex = this._savedZIndexInline;
       }
       this._stackingZApplied = false;
       this._savedZIndexInline = "";
+      this._appliedZIndex = null;
     }
 
     // Migrate the canvas to the host that matches the current stacking
@@ -843,17 +846,11 @@ export class AqualensLens implements AqualensLensInstance {
     const CSS_BLUR_SCALE = 1 / 6;
     const parts: string[] = [];
     if (this.options.blurRadius > 0) {
-      parts.push(
-        `blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`,
-      );
+      parts.push(`blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`);
     }
     parts.push("saturate(1.2)", "brightness(1.05)");
     const backdropFilter = parts.join(" ");
-    this.element.style.setProperty(
-      "backdrop-filter",
-      backdropFilter,
-      "important",
-    );
+    this.element.style.setProperty("backdrop-filter", backdropFilter, "important");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (this.element.style as any).setProperty(
       "-webkit-backdrop-filter",
@@ -982,10 +979,8 @@ export class AqualensLens implements AqualensLensInstance {
     if (this._stackingZApplied) {
       if (this._savedZIndexInline === "") {
         this.element.style.removeProperty("z-index");
-        this._lastAppliedZIndex = "";
       } else {
         this.element.style.zIndex = this._savedZIndexInline;
-        this._lastAppliedZIndex = this._savedZIndexInline;
       }
       this._stackingZApplied = false;
       this._savedZIndexInline = "";

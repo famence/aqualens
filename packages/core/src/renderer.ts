@@ -257,9 +257,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
    * Set of lenses whose `publicCanvas` has been (re)painted in the
    * current `render()` pass. After the per-group loop finishes, every
    * lens NOT in this set is reset to its own single-lens region so
-   * stale merged-bbox pixels (left over from a previous frame where
-   * the lens was part of a merged group) cannot leak into the viewport
-   * via the canvas's negative offsets.
+   * its canvas size and viewport position track the current lens rect
+   * (and any stale merged-bbox dimensions are released).
    */
   _renderedLensesScratch = new Set<AqualensLens>();
 
@@ -861,17 +860,11 @@ export class AqualensRenderer implements AqualensRendererInstance {
     }
 
     // Reset per-lens public canvases that were NOT repainted in this
-    // frame back to their own single-lens region (lens rect + shadow
-    // pad). When a lens leaves a merged group — either because its
-    // siblings scrolled off-screen, or because it itself went off-screen
-    // — its canvas would otherwise stay sized to the previous frame's
-    // union bbox and keep stale merged-blob pixels. Because the canvas
-    // is positioned absolutely inside the lens with negative offsets
-    // that span the bbox, those pixels can intrude into the viewport
-    // long after the lens itself has scrolled away (visible as a
-    // "ghost" of the merged blob a screen later). Resyncing to the
-    // lens's own rect both clamps the canvas back inside the lens and
-    // discards the stale buffer when dimensions actually shrink.
+    // frame to their own single-lens region (lens rect + shadow pad)
+    // or zero-size when the lens has no rect. This both moves stale
+    // merged-blob pixels off-screen (the canvas follows the lens rect
+    // out of the viewport) and shrinks the backing buffer when a lens
+    // shifts from a merged-group bbox to its own region.
     for (let li = 0; li < this.lenses.length; li++) {
       const lens = this.lenses[li];
       if (renderedLenses.has(lens)) continue;
@@ -1104,7 +1097,12 @@ export class AqualensRenderer implements AqualensRendererInstance {
         css += `z-index:${stackingIndex * 2};`;
       }
       host.style.cssText = css;
-      document.body.appendChild(host);
+      // Insert at the start of body so the host comes before any
+      // user-mounted lens elements in tree order. This matters for the
+      // implicit-stackingIndex case: there host has `z-index: auto`,
+      // and at equal z-index tree order resolves the layering — host
+      // first means lens content paints above the glass canvas.
+      document.body.insertBefore(host, document.body.firstChild);
       this._canvasHosts.set(key, host);
       this._canvasHostCounts.set(key, 0);
     }

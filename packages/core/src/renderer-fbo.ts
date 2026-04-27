@@ -555,22 +555,25 @@ function copySingleLensRegionToPublicCanvas(
 const MERGE_BBOX_EXTRA_CSS = 30 + 10;
 
 /**
- * Merged-group copy: every lens in the group receives an identical
- * canvas sized to the group's padded union bbox, painted with the full
- * merged-blob render.
+ * Merged-group copy: a single "primary" lens hosts the full union-bbox
+ * blob image; all other lenses in the group are zeroed-out canvases.
  *
- * Bridge pixels (between two non-overlapping rects) live inside the
- * union bbox but outside any single lens rect and therefore remain
- * visible on all member canvases.
+ * Why one canvas instead of N copies: every lens in the merged group
+ * shares the same WebGL render at the same viewport coords. Painting an
+ * identical blob onto N sibling canvases (all positioned at union bbox
+ * in the renderer's fixed host) is pure visual redundancy — the
+ * canvases overlap pixel-for-pixel, so only the topmost one matters.
+ * One blob copy gives the same result while saving N-1 `drawImage`
+ * calls and N-1 backing buffers' worth of memory.
  *
- * Historical note:
- * We used to clear prior DOM-order lens rectangles from upper canvases
- * to prevent them overpainting lower lenses' DOM content when each
- * public canvas was a child of its lens element. After migrating public
- * canvases into renderer-level fixed hosts (below lens DOM), that clear
- * pass is no longer required and can introduce visible hard-edged
- * cutouts during merge animation (rectangular seams). So merged copies
- * now keep the full rendered blob untouched.
+ * Historical note: an earlier version painted the blob into every lens
+ * canvas and used a `clearRect` pass to subtract DOM-earlier lens rects
+ * (so a child's stacking context could show through). Once public
+ * canvases moved out of the lens DOM into fixed renderer-level hosts
+ * (and lens children always paint on top via the host/lens z-index
+ * scheme in `_syncStackingZIndex`), that clear pass became both
+ * unnecessary and visually harmful (rectangular seams along the blob
+ * edges during merge animation).
  */
 function copyMergedGroupToPublicCanvases(
   renderer: AqualensRenderer,
@@ -587,6 +590,7 @@ function copyMergedGroupToPublicCanvases(
   let unionRight = -Infinity;
   let unionBottom = -Infinity;
   let maxShadowPad = 0;
+  let primary: AqualensLens | null = null;
   for (const lens of lenses) {
     const rect = lens.rectPx;
     if (!rect || rect.width <= 0 || rect.height <= 0) continue;
@@ -598,8 +602,12 @@ function copyMergedGroupToPublicCanvases(
       unionBottom = rect.top + rect.height;
     const sp = lens.computeShadowPad();
     if (sp > maxShadowPad) maxShadowPad = sp;
+    // First valid lens wins as the primary blob host. Any group member
+    // would render the same pixels, so we don't need to pick by DOM
+    // order — saving the `compareDocumentPosition` sort entirely.
+    if (!primary) primary = lens;
   }
-  if (!isFinite(unionLeft)) return;
+  if (!primary || !isFinite(unionLeft)) return;
 
   const padding = Math.max(MERGE_BBOX_EXTRA_CSS, maxShadowPad);
   unionLeft -= padding;
@@ -624,64 +632,66 @@ function copyMergedGroupToPublicCanvases(
   const dstX = srcX - sx;
   const dstY = srcY - sy;
 
-  for (let i = 0; i < lenses.length; i++) {
-    const lens = lenses[i];
-    const rect = lens.rectPx;
-    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+  // Zero secondary canvases first, so their backing buffers can be
+  // released and they paint nothing into the merged group's host. We
+  // do this BEFORE drawing into the primary so a transient frame
+  // never has more than one canvas carrying the blob.
+  for (const lens of lenses) {
+    if (lens === primary) continue;
+    lens._syncPublicCanvasForRegion(0, 0, 0, 0);
+  }
 
-    lens._syncPublicCanvasForRegion(
-      unionLeft,
-      unionTop,
-      unionWidth,
-      unionHeight,
+  primary._syncPublicCanvasForRegion(
+    unionLeft,
+    unionTop,
+    unionWidth,
+    unionHeight,
+  );
+  const target = primary.publicCanvas;
+  const ctx = primary.publicCtx;
+  if (target.width === 0 || target.height === 0) return;
+
+  ctx.clearRect(0, 0, target.width, target.height);
+  if (!hasSourcePixels) return;
+
+  try {
+    ctx.drawImage(
+      renderer.canvas,
+      srcX,
+      srcY,
+      srcW,
+      srcH,
+      dstX,
+      dstY,
+      srcW,
+      srcH,
     );
-    const target = lens.publicCanvas;
-    const ctx = lens.publicCtx;
-    if (target.width === 0 || target.height === 0) continue;
-
-    ctx.clearRect(0, 0, target.width, target.height);
-
-    if (hasSourcePixels) {
-      try {
-        ctx.drawImage(
-          renderer.canvas,
-          srcX,
-          srcY,
-          srcW,
-          srcH,
-          dstX,
-          dstY,
-          srcW,
-          srcH,
-        );
-        lens._disableStartupFallback();
-      } catch {
-        // Source canvas momentarily invalid — let the next frame retry.
-      }
+    primary._disableStartupFallback();
+    for (const lens of lenses) {
+      if (lens !== primary) lens._disableStartupFallback();
     }
+  } catch {
+    // Source canvas momentarily invalid — let the next frame retry.
   }
 }
 
 /**
  * For every lens in a freshly-rendered group, copy the relevant region
- * of the private WebGL canvas into the lens's `publicCanvas` (a 2D
- * canvas living inside the renderer's per-stackingIndex host container,
- * positioned at viewport coordinates). After this call returns, the
- * user sees the new pixels.
+ * of the private WebGL canvas into a public canvas the user will see.
  *
  * Single-lens groups use the lens's own rect + shadowPad as the canvas
- * region. Multi-lens (merged) groups share the same padded union bbox
- * across all lenses' canvases.
+ * region. Multi-lens (merged) groups paint the full union-bbox blob
+ * once into one "primary" lens canvas and reset the other members to
+ * zero size — see `copyMergedGroupToPublicCanvases` for why.
  *
  * Because every public canvas is hosted in a viewport-fixed container
- * rather than as a child of its lens element, the canvases of a merged
- * group always remain pixel-aligned with each other regardless of how
- * the underlying lens hosts are animated. This eliminates the "seam /
- * doubled silhouette" artifact that used to appear during scroll when
- * one merged lens was driven by a CSS scroll-driven animation
- * (`animation-timeline: scroll(...)`) while another was static — the
- * canvases would otherwise drift apart in viewport space between
- * renders.
+ * rather than as a child of its lens element, canvas screen position
+ * does not depend on how the lens host is animated. This eliminates the
+ * "seam / doubled silhouette" artifact that used to appear during
+ * scroll when one merged lens was driven by a CSS scroll-driven
+ * animation (`animation-timeline: scroll(...)`) while another was
+ * static — the canvases would otherwise drift apart in viewport space
+ * between renders.
  */
 export function copyLensRegionsToPublicCanvases(
   renderer: AqualensRenderer,
