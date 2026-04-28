@@ -120,6 +120,7 @@ export interface RevealMaskedUniforms {
   revealRect: WebGLUniformLocation | null;
   refThickness: WebGLUniformLocation | null;
   refFactor: WebGLUniformLocation | null;
+  refZoom: WebGLUniformLocation | null;
   refDispersion: WebGLUniformLocation | null;
 }
 
@@ -134,6 +135,7 @@ export interface MainUniforms {
   radiusCorners: WebGLUniformLocation | null;
   refThickness: WebGLUniformLocation | null;
   refFactor: WebGLUniformLocation | null;
+  refZoom: WebGLUniformLocation | null;
   refDispersion: WebGLUniformLocation | null;
   refFresnelRange: WebGLUniformLocation | null;
   refFresnelHardness: WebGLUniformLocation | null;

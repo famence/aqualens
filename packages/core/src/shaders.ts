@@ -170,6 +170,7 @@ uniform vec4 u_revealRect;
 
 uniform float u_refThickness;
 uniform float u_refFactor;
+uniform float u_refZoom;
 uniform float u_refDispersion;
 
 out vec4 fragColor;
@@ -352,6 +353,7 @@ uniform vec4 u_radiusCorners;
 
 uniform float u_refThickness;
 uniform float u_refFactor;
+uniform float u_refZoom;
 uniform float u_refDispersion;
 uniform float u_refFresnelRange;
 uniform float u_refFresnelHardness;
@@ -375,7 +377,7 @@ uniform vec4 u_shapes[MAX_MERGE_SHAPES * 2];
 uniform vec4 u_shadowShapes[MAX_MERGE_SHAPES * 2];
 
 uniform float u_blurAmount;
-#define MAT_VECS 4
+#define MAT_VECS 5
 uniform vec4 u_shapeMaterials[MAX_MERGE_SHAPES * MAT_VECS];
 
 out vec4 fragColor;
@@ -530,6 +532,7 @@ struct Material {
   float blurEdge;
   float refThickness;
   float refFactor;
+  float refZoom;
   float refDispersion;
   float refFresnelRange;
   float refFresnelHardness;
@@ -546,20 +549,22 @@ Material loadMaterial(int idx) {
   vec4 v1 = u_shapeMaterials[b + 1];
   vec4 v2 = u_shapeMaterials[b + 2];
   vec4 v3 = u_shapeMaterials[b + 3];
+  vec4 v4 = u_shapeMaterials[b + 4];
   Material m;
   m.tint = v0;
   m.blurAmount = v1.x;
   m.blurEdge = v1.y;
   m.refThickness = v1.z;
   m.refFactor = v1.w;
-  m.refDispersion = v2.x;
-  m.refFresnelRange = v2.y;
-  m.refFresnelHardness = v2.z;
-  m.refFresnelFactor = v2.w;
-  m.glareRange = v3.x;
-  m.glareHardness = v3.y;
-  m.glareFactor = v3.z;
-  m.glareConvergence = v3.w;
+  m.refZoom = v2.x;
+  m.refDispersion = v2.y;
+  m.refFresnelRange = v2.z;
+  m.refFresnelHardness = v2.w;
+  m.refFresnelFactor = v3.x;
+  m.glareRange = v3.y;
+  m.glareHardness = v3.z;
+  m.glareFactor = v3.w;
+  m.glareConvergence = v4.x;
   return m;
 }
 
@@ -570,6 +575,7 @@ Material mixMat(Material a, Material b, float t) {
   m.blurEdge = mix(a.blurEdge, b.blurEdge, t);
   m.refThickness = mix(a.refThickness, b.refThickness, t);
   m.refFactor = mix(a.refFactor, b.refFactor, t);
+  m.refZoom = mix(a.refZoom, b.refZoom, t);
   m.refDispersion = mix(a.refDispersion, b.refDispersion, t);
   m.refFresnelRange = mix(a.refFresnelRange, b.refFresnelRange, t);
   m.refFresnelHardness = mix(a.refFresnelHardness, b.refFresnelHardness, t);
@@ -588,6 +594,7 @@ Material globalMat() {
   m.blurEdge = float(u_blurEdge);
   m.refThickness = u_refThickness;
   m.refFactor = u_refFactor;
+  m.refZoom = u_refZoom;
   m.refDispersion = u_refDispersion;
   m.refFresnelRange = u_refFresnelRange;
   m.refFresnelHardness = u_refFresnelHardness;

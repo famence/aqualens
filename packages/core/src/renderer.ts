@@ -562,6 +562,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
         this._revealMaskedProgram,
         "u_refFactor",
       ),
+      refZoom: gl.getUniformLocation(this._revealMaskedProgram, "u_refZoom"),
       refDispersion: gl.getUniformLocation(
         this._revealMaskedProgram,
         "u_refDispersion",
@@ -617,6 +618,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
       radiusCorners: gl.getUniformLocation(program, "u_radiusCorners"),
       refThickness: gl.getUniformLocation(program, "u_refThickness"),
       refFactor: gl.getUniformLocation(program, "u_refFactor"),
+      refZoom: gl.getUniformLocation(program, "u_refZoom"),
       refDispersion: gl.getUniformLocation(program, "u_refDispersion"),
       refFresnelRange: gl.getUniformLocation(program, "u_refFresnelRange"),
       refFresnelHardness: gl.getUniformLocation(
