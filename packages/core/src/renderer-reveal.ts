@@ -412,6 +412,7 @@ export interface RevealLensShape {
 export interface RevealRefraction {
   thickness: number;
   factor: number;
+  zoom: number;
   dispersion: number;
 }
 
@@ -483,6 +484,7 @@ export function compositeRevealsOnLensForGroup(
   gl.uniform1f(uniforms.mergeK, shapes.length > 1 ? mergeK : 0);
   gl.uniform1f(uniforms.refThickness, refraction.thickness);
   gl.uniform1f(uniforms.refFactor, refraction.factor);
+  gl.uniform1f(uniforms.refZoom, refraction.zoom);
   gl.uniform1f(uniforms.refDispersion, refraction.dispersion);
 
   // Pack shapes into the same [center.xy, halfSize.xy][corners.tl,tr,br,bl]

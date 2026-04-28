@@ -7,6 +7,7 @@ export interface GlassSettings {
   refraction: {
     thickness: number;
     factor: number;
+    zoom: number;
     dispersion: number;
     fresnelRange: number;
     fresnelHardness: number;
@@ -31,6 +32,7 @@ export const DEFAULT_GLASS_SETTINGS: GlassSettings = {
   refraction: {
     thickness: 20,
     factor: 1.4,
+    zoom: 0,
     dispersion: 7,
     fresnelRange: 0,
     fresnelHardness: 0,
@@ -54,6 +56,7 @@ export const DEFAULT_GLASS_SETTINGS: GlassSettings = {
 const PANEL_REFRACTION = {
   thickness: 12,
   factor: 1.2,
+  zoom: 0,
   dispersion: 3,
   fresnelRange: 0,
   fresnelHardness: 0,
@@ -361,6 +364,14 @@ export function GlassControls({
                   max={3}
                   step={0.01}
                   onChange={(v) => updateRefraction("factor", v)}
+                />
+                <Slider
+                  label="Zoom"
+                  value={settings.refraction.zoom}
+                  min={-0.9}
+                  max={2}
+                  step={0.01}
+                  onChange={(v) => updateRefraction("zoom", v)}
                 />
                 <Slider
                   label="Dispersion"

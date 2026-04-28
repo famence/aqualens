@@ -157,6 +157,7 @@ export default function DemoPage() {
             refraction={{
               thickness: 20,
               factor: 1.4,
+              zoom: 0,
               dispersion: 7,
               fresnelRange: 0,
               fresnelHardness: 0,

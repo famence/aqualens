@@ -207,6 +207,7 @@ function setMaterialUniforms(
   const glare = options.glare;
   gl.uniform1f(renderer._mainU.refThickness, refraction.thickness);
   gl.uniform1f(renderer._mainU.refFactor, refraction.factor);
+  gl.uniform1f(renderer._mainU.refZoom, refraction.zoom);
   gl.uniform1f(renderer._mainU.refDispersion, refraction.dispersion);
   gl.uniform1f(renderer._mainU.refFresnelRange, refraction.fresnelRange);
   gl.uniform1f(
@@ -248,7 +249,7 @@ function setShapeMaterialUniforms(
 
   for (let index = 0; index < Math.min(lenses.length, MAX_SHAPES); index++) {
     const options = lenses[index].options;
-    const base = index * 16;
+    const base = index * 20;
     const refraction = options.refraction;
     const glare = options.glare;
 
@@ -263,15 +264,16 @@ function setShapeMaterialUniforms(
     data[base + 6] = refraction.thickness;
     data[base + 7] = refraction.factor;
 
-    data[base + 8] = refraction.dispersion;
-    data[base + 9] = refraction.fresnelRange;
-    data[base + 10] = refraction.fresnelHardness / 100;
-    data[base + 11] = refraction.fresnelFactor / 100;
+    data[base + 8] = refraction.zoom;
+    data[base + 9] = refraction.dispersion;
+    data[base + 10] = refraction.fresnelRange;
+    data[base + 11] = refraction.fresnelHardness / 100;
 
-    data[base + 12] = glare.range;
-    data[base + 13] = glare.hardness / 100;
-    data[base + 14] = glare.factor / 100;
-    data[base + 15] = glare.convergence / 100;
+    data[base + 12] = refraction.fresnelFactor / 100;
+    data[base + 13] = glare.range;
+    data[base + 14] = glare.hardness / 100;
+    data[base + 15] = glare.factor / 100;
+    data[base + 16] = glare.convergence / 100;
   }
 
   renderer.gl.uniform4fv(renderer._mainU.shapeMaterials, data);
