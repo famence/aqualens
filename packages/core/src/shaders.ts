@@ -351,6 +351,7 @@ uniform vec4 u_radiusCorners;
 
 uniform float u_refThickness;
 uniform float u_refFactor;
+uniform float u_refZoom;
 uniform float u_refDispersion;
 uniform float u_refFresnelRange;
 uniform float u_refFresnelHardness;
