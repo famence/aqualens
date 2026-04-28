@@ -45,7 +45,7 @@ await updateSharedRendererConfig(
 const config: AqualensConfig = {
   ...DEFAULT_OPTIONS,
   resolution: 2,
-  refraction: { ...DEFAULT_OPTIONS.refraction, thickness: 24 },
+  refraction: { ...DEFAULT_OPTIONS.refraction, thickness: 24, zoom: 0.2 },
   glare: { ...DEFAULT_OPTIONS.glare, factor: 40 },
   blurRadius: 4,
   blurEdge: true,

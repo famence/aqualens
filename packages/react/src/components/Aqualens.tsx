@@ -123,10 +123,17 @@ function buildConfig(options: {
   stackingIndex?: number;
   onInit?: (lens: AqualensLensInstance) => void;
 }): AqualensConfig {
+  const mergedRefraction = {
+    ...DEFAULT_OPTIONS.refraction,
+    ...options.refraction,
+  };
   return {
     ...DEFAULT_OPTIONS,
     resolution: options.resolution ?? DEFAULT_OPTIONS.resolution,
-    refraction: { ...DEFAULT_OPTIONS.refraction, ...options.refraction },
+    refraction: {
+      ...mergedRefraction,
+      zoom: Math.max(-1, Math.min(1, mergedRefraction.zoom)),
+    },
     glare: { ...DEFAULT_OPTIONS.glare, ...options.glare },
     blurRadius: options.blurRadius ?? DEFAULT_OPTIONS.blurRadius,
     blurEdge: options.blurEdge ?? DEFAULT_OPTIONS.blurEdge,

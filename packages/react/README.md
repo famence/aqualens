@@ -59,7 +59,7 @@ export function HeroGlass() {
 | --- | --- |
 | `snapshotTarget` | Snapshot root: `HTMLElement` or `null`. |
 | `resolution` | `0.1`–`3.0`, default `2` — internal capture scale. |
-| `refraction`, `glare` | Same shapes as core (`RefractionOptions`, `GlareOptions`). |
+| `refraction`, `glare` | Same shapes as core (`RefractionOptions`, `GlareOptions`), including `refraction.zoom` (`-1..1`). |
 | `blurRadius`, `blurEdge` | Blur strength and edge clamping. |
 | `opaqueOverlap` | macOS-style stacking when lenses use different `z-index`. |
 | `powerSave` | Use lightweight non-WebGL path. |

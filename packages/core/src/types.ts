@@ -18,6 +18,8 @@ export interface RefractionOptions {
   thickness?: number;
   /** Refraction intensity multiplier (0 = no refraction). @default 1 */
   factor?: number;
+  /** Lens zoom amount (-1 = strong zoom-out, 1 = strong zoom-in). @default 0 */
+  zoom?: number;
   /** Chromatic aberration (color fringing) amount. @default 7 */
   dispersion?: number;
   /** Fresnel edge-highlight range in pixels. @default 0 */
@@ -158,6 +160,7 @@ export const DEFAULT_OPTIONS: AqualensConfig = {
   refraction: {
     thickness: 20,
     factor: 1,
+    zoom: 0,
     dispersion: 7,
     fresnelRange: 0,
     fresnelHardness: 0,
