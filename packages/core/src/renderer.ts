@@ -110,59 +110,39 @@ export interface SnapshotSourceConfig {
 const IMPLICIT_HOST_KEY = "__implicit__";
 
 /**
- * How the canvas host is anchored to the page. `fixed` mirrors a
- * `position: fixed` lens (host stays at the visual viewport regardless
- * of scroll / rubber-band); `absolute` is the default and lives in the
- * document layout, so the host scrolls with the page just like the lens
- * DOM does. See {@link AqualensRenderer._resolveAnchorMode} for the
- * selection rules.
+ * Build a CSS rule string for a lens-canvas host container. The host is
+ * `position: absolute; top: 0; left: 0` and lives inside the lens's
+ * nearest stacking-context ancestor — i.e. it participates in the
+ * document layout the same way the lens itself does. The canvases
+ * inside use `position: absolute; left/top` relative to the host (not
+ * the visual viewport), and `_syncPublicCanvasForRegion` translates
+ * a lens's viewport CSS-pixel rect into host-local coordinates via
+ * `host.getBoundingClientRect()` before writing the inline styles.
+ *
+ * Why document-anchored hosts (and not `position: fixed; inset: 0;`):
+ * during macOS / iOS rubber-band overscroll the document content is
+ * visually pulled past its scroll boundaries, but `position: fixed`
+ * elements stay anchored to the visual viewport (they don't follow the
+ * elastic shift). With a fixed host, the public canvases were therefore
+ * stuck while the lens DOM and the rest of the page rubber-banded —
+ * producing a one-frame visual desync between the glass effect and the
+ * underlying content. An `absolute` host shares the same coordinate
+ * system as the lens DOM, so both are translated by the rubber-band
+ * compositor pass equally and stay aligned without any JS work.
+ *
+ * `pointer-events: none` keeps the host from intercepting page input.
+ * `contain: layout style` isolates the host's layout from the parent
+ * (so absolute-positioned canvases inside don't expand the document's
+ * scroll size beyond what the lens DOM already needs).
+ *
+ * `isolation: isolate` is intentionally NOT used: that would form a
+ * stacking context for the host, which would force every canvas inside
+ * to live BELOW any lens DOM at the same z-index regardless of tree
+ * order. Without isolation, canvases inside the host participate in the
+ * outer stacking context directly, allowing per-canvas z-indexing that
+ * interleaves correctly with lens elements.
  */
-type CanvasHostAnchorMode = "fixed" | "absolute";
-
-/**
- * CSS rules for lens-canvas host containers. There are two variants
- * selected per lens via {@link AqualensRenderer._resolveAnchorMode}:
- *
- * - {@link HOST_ABSOLUTE_CSS} (the default for in-flow lenses): the host
- *   is `position: absolute; top: 0; left: 0;` and lives in the document
- *   layout. It scrolls with the page just like the lens DOM, so during
- *   macOS / iOS rubber-band overscroll both shift together and the
- *   canvas inside the host stays pixel-aligned with its lens.
- *
- * - {@link HOST_FIXED_CSS} (used for `position: fixed` lenses): the host
- *   is `position: fixed; inset: 0;` and stays anchored to the visual
- *   viewport. It mirrors the lens's own viewport-anchored behavior, so
- *   the canvas stays at the same viewport position as the lens during
- *   scroll AND rubber-band — without that, the absolute host (in body)
- *   would shift visually with the document during rubber-band while the
- *   fixed lens stayed put, producing a transient mid-bounce desync.
- *
- * The two modes are differentiated in the host key (`_stackingHostKey`)
- * so a fixed lens and a non-fixed lens at the same stackingIndex /
- * stacking-context root don't end up sharing a host with the wrong
- * anchor.
- *
- * Both variants share the rest of the rules:
- *
- *  - `pointer-events: none` keeps the host from intercepting page input.
- *  - `contain: layout style` isolates the host's layout from the parent
- *    (so absolute-positioned canvases inside don't expand the document's
- *    scroll size beyond what the lens DOM already needs).
- *  - No `isolation: isolate`: that would form a stacking context for the
- *    host, which would force every canvas inside to live BELOW any lens
- *    DOM at the same z-index regardless of tree order. Without
- *    isolation, canvases inside the host participate in the outer
- *    stacking context directly, allowing per-canvas z-indexing that
- *    interleaves correctly with lens elements.
- *
- * Both modes are interchangeable from `_syncPublicCanvasForRegion`'s
- * point of view: it always converts viewport coords to host-local
- * coords by subtracting the host's current `getBoundingClientRect()`,
- * which works regardless of how the host is positioned.
- */
-const HOST_FIXED_CSS =
-  "position:fixed;inset:0;pointer-events:none;contain:layout style;";
-const HOST_ABSOLUTE_CSS =
+const HOST_BASE_CSS =
   "position:absolute;top:0;left:0;pointer-events:none;contain:layout style;";
 
 export class AqualensRenderer implements AqualensRendererInstance {
@@ -313,24 +293,18 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
   /**
    * Containers that host the per-lens public canvases, keyed by
-   * (`stackingIndex`, nearest stacking-context ancestor, anchor mode).
-   * We intentionally split hosts not only by z-group but also by:
+   * (`stackingIndex`, nearest stacking-context ancestor). We intentionally
+   * split hosts not only by z-group but also by context root: when a lens
+   * lives inside its own stacking context (for example, a `position: fixed`
+   * bottom bar), a body-level host would paint in a different context layer
+   * and can appear above the lens's DOM content.
    *
-   *  - context root, so when a lens lives inside its own stacking
-   *    context (e.g. a `position: fixed` bottom bar), a body-level host
-   *    would paint in a different context layer and could appear above
-   *    the lens's DOM content;
-   *  - anchor mode (`fixed` vs `absolute`), so a `position: fixed`
-   *    lens sits in a viewport-anchored host while a normal-flow lens
-   *    sits in a document-anchored one (see {@link _resolveAnchorMode}).
-   *
-   * Keeping host and lens in the same stacking context root preserves
-   * the "children above glass" guarantee without requiring user-side
-   * z-index workarounds. Keeping host and lens in the same coordinate
-   * system (matching anchor mode) is what `_syncPublicCanvasForRegion`
-   * relies on when computing canvas-vs-host offsets — both move
-   * together during scroll AND rubber-band, so the cached offset stays
-   * valid frame-to-frame without per-frame JS work.
+   * Keeping host and lens in the same stacking context root preserves the
+   * "children above glass" guarantee without requiring user-side z-index
+   * workarounds. It also keeps the host in the same coordinate system as
+   * the lens DOM (both translated together by the browser during scroll
+   * and rubber-band overscroll), which is what `_syncPublicCanvasForRegion`
+   * relies on when computing canvas-vs-host offsets.
    *
    * Why this design exists (the "merge drift" bug it fixes): in earlier
    * versions each lens's public canvas was a child of the lens DOM
@@ -1156,24 +1130,19 @@ export class AqualensRenderer implements AqualensRendererInstance {
   /**
    * Build the key used to look up a lens's host in {@link _canvasHosts}.
    * The key is a tuple of:
-   *   - stacking group (`stackingIndex` or implicit sentinel),
-   *   - nearest stacking-context ancestor ID, and
-   *   - anchor mode (`fixed` vs `absolute`, see {@link _resolveAnchorMode}).
+   *   - stacking group (`stackingIndex` or implicit sentinel), and
+   *   - nearest stacking-context ancestor ID.
    *
-   * Including the anchor mode keeps fixed and non-fixed lenses on
-   * separate hosts even when they would otherwise share a stacking
-   * group + context root, so each canvas lives in a host whose
-   * positioning matches its lens.
+   * This ensures hosts remain in the same stacking context as their lens DOM.
    */
   _stackingHostKey(
     stackingIndex: number | undefined,
     hostRoot: HTMLElement,
-    anchorMode: CanvasHostAnchorMode,
   ): string {
     const zKey =
       stackingIndex === undefined ? IMPLICIT_HOST_KEY : String(stackingIndex);
     const rootId = this._canvasHostRootId(hostRoot);
-    return `${zKey}::${rootId}::${anchorMode}`;
+    return `${zKey}::${rootId}`;
   }
 
   /** Assign/read a stable numeric ID for a stacking-context root element. */
@@ -1183,41 +1152,6 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const next = ++this._canvasHostRootIdSeq;
     this._canvasHostRootIds.set(root, next);
     return next;
-  }
-
-  /**
-   * Decide whether the host for a given lens should be `position: fixed`
-   * (viewport-anchored, mirroring a `position: fixed` lens) or
-   * `position: absolute` (document-anchored, the default for lenses in
-   * normal flow).
-   *
-   * A `position: fixed` lens stays anchored to the visual viewport even
-   * during macOS / iOS rubber-band overscroll, where the rest of the
-   * document is visually pulled past its scroll boundaries. A document-
-   * anchored host (the default) DOES follow that elastic shift, so a
-   * fixed lens with an `absolute` host would visually drift away from
-   * its canvas mid-bounce. Putting fixed lenses on a `position: fixed`
-   * host keeps the host glued to the same coordinate system the lens
-   * uses, eliminating the desync.
-   *
-   * `position: sticky` is deliberately NOT promoted to "fixed" anchor
-   * mode here: sticky alternates between flow-following and viewport-
-   * anchored behavior at runtime, and either choice would be wrong half
-   * the time. Per-frame compensation in `_syncPublicCanvasForRegion` is
-   * good enough for the steady-state phases; the rubber-band edge case
-   * for a stuck sticky lens is a known remaining issue.
-   *
-   * Lenses that are NOT themselves fixed but live inside a fixed
-   * ancestor are already handled correctly by `_resolveCanvasHostRoot`:
-   * their host is inserted inside that fixed ancestor with
-   * `position: absolute`, which makes its containing block the fixed
-   * ancestor — so its viewport rect is constant during scroll, the same
-   * effective behavior as a `position: fixed` host.
-   */
-  private _resolveAnchorMode(lensElement: HTMLElement): CanvasHostAnchorMode {
-    return window.getComputedStyle(lensElement).position === "fixed"
-      ? "fixed"
-      : "absolute";
   }
 
   /**
@@ -1269,31 +1203,25 @@ export class AqualensRenderer implements AqualensRendererInstance {
 
   /**
    * Lazily create (or return) the host container that owns canvases for
-   * (`stackingIndex`, nearest stacking-context ancestor, anchor mode).
+   * (`stackingIndex`, nearest stacking-context ancestor).
    *
    * `z-index` of the host is taken from the lens's `stackingIndex` (so
    * cascade ordering between groups still works inside a context root).
    * For implicit lenses, no `z-index` is set so they layer with surrounding
    * DOM in that same root by tree order.
-   *
-   * Anchor mode (see {@link _resolveAnchorMode}) selects between
-   * `position: fixed` (viewport-anchored, used for `position: fixed`
-   * lenses) and `position: absolute` (document-anchored, used for the
-   * common in-flow case).
    */
   _acquireCanvasHost(
     stackingIndex: number | undefined,
     lensElement: HTMLElement,
   ): { host: HTMLDivElement; hostKey: string } {
     const hostRoot = this._resolveCanvasHostRoot(lensElement);
-    const anchorMode = this._resolveAnchorMode(lensElement);
-    const key = this._stackingHostKey(stackingIndex, hostRoot, anchorMode);
+    const key = this._stackingHostKey(stackingIndex, hostRoot);
     let host = this._canvasHosts.get(key);
     if (!host) {
       host = document.createElement("div");
       host.setAttribute("data-aqualens-host", "");
       host.setAttribute("data-aqualens-ignore", "");
-      let css = anchorMode === "fixed" ? HOST_FIXED_CSS : HOST_ABSOLUTE_CSS;
+      let css = HOST_BASE_CSS;
       if (stackingIndex !== undefined) {
         // Keep host one layer below lens DOM at the same stackingIndex.
         // Lens element itself is synced to `stackingIndex * 2 + 1` in
