@@ -118,8 +118,10 @@ float mainSDF(vec2 fc) {
 void main() {
   vec2 localCoord = v_uv * u_resolution;
   float sdf = mainSDF(localCoord);
-  float px = u_dpr / u_resolution.y;
-  float edgeWidth = max(2.0 * px, 1.0 / u_resolution.y);
+  // Derivative-based AA keeps the SDF edge around ~1 physical pixel wide.
+  // The previous fixed width (2.0 * px) effectively became ~2 CSS px,
+  // which looked overly soft on dark semi-transparent tints.
+  float edgeWidth = max(fwidth(sdf), 1.0 / u_resolution.y);
   float a = 1.0 - smoothstep(-edgeWidth, edgeWidth, sdf);
   if (a <= 0.0) discard;
   fragColor = vec4(0.0, 0.0, 0.0, a);
@@ -279,7 +281,7 @@ void main() {
   vec2 localCoord = v_uv * u_resolution;
   float sdf = mainSDF(localCoord);
   float px = u_dpr / u_resolution.y;
-  float edgeWidth = max(2.0 * px, 1.0 / u_resolution.y);
+  float edgeWidth = max(fwidth(sdf), 1.0 / u_resolution.y);
   float mask = 1.0 - smoothstep(-edgeWidth, edgeWidth, sdf);
   if (mask <= 0.0) discard;
 
@@ -699,7 +701,7 @@ void main() {
     outColor = vec4(0.0);
   }
 
-  float edgeWidth = max(2.0 * px, 1.0 / u_resolution.y);
+  float edgeWidth = max(fwidth(sdf), 1.0 / u_resolution.y);
   float glassAlpha = 1.0 - smoothstep(-edgeWidth, edgeWidth, sdf);
 
   float shadowAlpha = 0.0;

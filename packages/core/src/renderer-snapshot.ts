@@ -13,7 +13,10 @@ import { injectSnapshotHideStyles } from "./utils";
  * and the user only ever sees per-lens public canvases.
  */
 export function resizeCanvas(renderer: AqualensRenderer): void {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(
+    renderer._snapshotResolution,
+    window.devicePixelRatio || 1,
+  );
   renderer.canvas.width = innerWidth * dpr;
   renderer.canvas.height = innerHeight * dpr;
   renderer.gl.viewport(0, 0, renderer.canvas.width, renderer.canvas.height);
@@ -142,8 +145,12 @@ export function enableResizeFallback(renderer: AqualensRenderer): void {
       const spread = Math.max(0, fresnelRange * 0.15);
       const alpha = Math.min(0.6, fresnelFactor * 0.4);
       glare.style.boxShadow =
-        `inset 0 0 ${boxShadowBlur.toFixed(1)}px ${spread.toFixed(1)}px rgba(255,255,255,${alpha.toFixed(3)}),` +
-        `inset 0 1px 0 0 rgba(255,255,255,${Math.min(0.3, alpha * 0.6).toFixed(3)})`;
+        `inset 0 0 ${boxShadowBlur.toFixed(1)}px ${spread.toFixed(
+          1,
+        )}px rgba(255,255,255,${alpha.toFixed(3)}),` +
+        `inset 0 1px 0 0 rgba(255,255,255,${Math.min(0.3, alpha * 0.6).toFixed(
+          3,
+        )})`;
     }
 
     element.appendChild(glare);

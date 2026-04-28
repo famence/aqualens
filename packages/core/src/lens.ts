@@ -567,7 +567,7 @@ export class AqualensLens implements AqualensLensInstance {
     this.radiusCssCorners = corners;
     this.radiusCss = Math.max(corners.tl, corners.tr, corners.br, corners.bl);
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = this._effectiveDpr();
     this.radiusGl = this.radiusCss * dpr;
     this.radiusGlCorners = {
       tl: corners.tl * dpr,
@@ -575,6 +575,29 @@ export class AqualensLens implements AqualensLensInstance {
       br: corners.br * dpr,
       bl: corners.bl * dpr,
     };
+  }
+
+  /**
+   * Effective device-pixel-ratio used for backing-buffer sizing and
+   * SDF-radius normalisation. Capped by the renderer's user-controlled
+   * `_snapshotResolution` (the public `resolution` prop) so that:
+   *
+   *  - the default `resolution: 2.0` keeps the historical "max 2x" cap and
+   *    avoids regressing perf on existing apps;
+   *  - bumping `resolution` to e.g. 3 on a 3x device (iPhone, etc.) lifts
+   *    the cap and lets the lens render natively. Without that, the lens's
+   *    public canvas was a 2x backing buffer being upscaled by the browser
+   *    to 3x physical pixels, smearing the SDF anti-alias band over ~1.5
+   *    physical pixels per step and producing visibly chunky edges —
+   *    especially with high-contrast semi-transparent tints (dark glass
+   *    on a light background) where every step of the AA gradient is
+   *    perceivable.
+   */
+  private _effectiveDpr(): number {
+    return Math.min(
+      this.renderer._snapshotResolution,
+      window.devicePixelRatio || 1,
+    );
   }
 
   /**
@@ -613,7 +636,7 @@ export class AqualensLens implements AqualensLensInstance {
       }
       return;
     }
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = this._effectiveDpr();
     const backingWidth = Math.max(1, Math.ceil(regionWidth * dpr));
     const backingHeight = Math.max(1, Math.ceil(regionHeight * dpr));
 
@@ -869,11 +892,17 @@ export class AqualensLens implements AqualensLensInstance {
     const CSS_BLUR_SCALE = 1 / 6;
     const parts: string[] = [];
     if (this.options.blurRadius > 0) {
-      parts.push(`blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`);
+      parts.push(
+        `blur(${(this.options.blurRadius * CSS_BLUR_SCALE).toFixed(1)}px)`,
+      );
     }
     parts.push("saturate(1.2)", "brightness(1.05)");
     const backdropFilter = parts.join(" ");
-    this.element.style.setProperty("backdrop-filter", backdropFilter, "important");
+    this.element.style.setProperty(
+      "backdrop-filter",
+      backdropFilter,
+      "important",
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (this.element.style as any).setProperty(
       "-webkit-backdrop-filter",
@@ -993,7 +1022,8 @@ export class AqualensLens implements AqualensLensInstance {
     }
 
     this.publicCanvas.remove();
-    if (this._canvasHostKey) this.renderer._releaseCanvasHost(this._canvasHostKey);
+    if (this._canvasHostKey)
+      this.renderer._releaseCanvasHost(this._canvasHostKey);
     this.element.removeAttribute(LENS_DOM_ATTR);
     this.element.style.removeProperty("backdrop-filter");
     this.element.style.removeProperty("-webkit-backdrop-filter");

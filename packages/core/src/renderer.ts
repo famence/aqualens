@@ -631,7 +631,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
     updateBlurConfig(this);
     ensureBlurPyramid(this);
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = Math.min(
+      this._snapshotResolution,
+      window.devicePixelRatio || 1,
+    );
     const visualViewport = window.visualViewport;
     const viewportWidth = visualViewport?.width ?? innerWidth;
     const viewportHeight = visualViewport?.height ?? innerHeight;
@@ -1246,6 +1249,20 @@ export class AqualensRenderer implements AqualensRendererInstance {
     const next = Math.max(0.1, Math.min(3.0, value));
     if (this._snapshotResolution === next) return;
     this._snapshotResolution = next;
+    // The resolution cap directly drives effective DPR (see
+    // `resizeCanvas`, `lens._effectiveDpr`, and `render()`), so any change
+    // requires re-sizing the offscreen canvas AND each lens's public
+    // canvas — otherwise the in-flight backing buffers stay at the old
+    // pixel density and a higher `resolution` would not actually improve
+    // edge quality on the next frame. We also invalidate per-lens style
+    // metrics so SDF radii recompute with the new DPR before render.
+    resizeCanvas(this);
+    for (const lens of this.lenses) {
+      lens.invalidateStyleMetrics();
+      lens.updateMetrics();
+      lens._syncPublicCanvasSize();
+    }
+    this.requestRender();
   }
 
   setSnapshotSource(config?: SnapshotSourceConfig): void {
