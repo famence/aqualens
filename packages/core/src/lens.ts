@@ -32,9 +32,10 @@ export class AqualensLens implements AqualensLensInstance {
    * is then copied here via `drawImage`.
    *
    * **Crucial layout detail** — this canvas does NOT live inside
-   * `lens.element`. Instead it sits in a per-stackingIndex host container
-   * (`<div data-aqualens-host>`) that is `position: fixed; inset: 0` on
-   * `document.body`. The canvas itself uses `position: absolute` with
+   * `lens.element`. Instead it sits in a renderer-managed host container
+   * (`<div data-aqualens-host>`) that is `position: fixed; inset: 0`
+   * attached to the lens's nearest stacking-context ancestor. The canvas
+   * itself uses `position: absolute` with
    * top/left/width/height in **viewport CSS pixels**, fully independent
    * of the lens host element's own positioning, transform or CSS
    * animations.
@@ -62,8 +63,8 @@ export class AqualensLens implements AqualensLensInstance {
    */
   publicCanvas: HTMLCanvasElement;
   publicCtx: CanvasRenderingContext2D;
-  /** Stacking key this canvas was last attached to (used to migrate hosts). */
-  private _canvasHostStackingIndex: number | undefined;
+  /** Host-map key this canvas was last attached to (used to migrate hosts). */
+  private _canvasHostKey = "";
   /**
    * Whether we installed `isolation: isolate` on the lens host element.
    * The canvas itself no longer needs it (it lives in the renderer's
@@ -225,10 +226,11 @@ export class AqualensLens implements AqualensLensInstance {
       throw new Error("Aqualens: 2D canvas context unavailable");
     }
     this.publicCtx = ctx;
-    this._canvasHostStackingIndex = this.options.stackingIndex;
-    const host = this.renderer._acquireCanvasHost(
-      this._canvasHostStackingIndex,
+    const { host, hostKey } = this.renderer._acquireCanvasHost(
+      this.options.stackingIndex,
+      this.element,
     );
+    this._canvasHostKey = hostKey;
     host.appendChild(this.publicCanvas);
 
     // Sync host z-index AFTER the canvas DOM node exists: the migration
@@ -670,7 +672,7 @@ export class AqualensLens implements AqualensLensInstance {
    *   2. The CSS `z-index` of the lens's host container (so canvases of
    *      different stacking groups layer correctly at body level).
    *   3. The host parent the canvas lives under (the renderer maintains
-   *      one host per unique stacking key — see
+   *      one host per unique `(stackingIndex × stacking-context-root)` key — see
    *      `_acquireCanvasHost`/`_releaseCanvasHost`). When stackingIndex
    *      changes (e.g. a `mergeLens` toggle in the demo), we migrate the
    *      canvas to the host of the new key and release the old host's
@@ -701,21 +703,25 @@ export class AqualensLens implements AqualensLensInstance {
       this._appliedZIndex = null;
     }
 
-    // Migrate the canvas to the host that matches the current stacking
-    // key. This is the second half of stackingIndex syncing — without it
-    // a lens that switches groups (e.g. `mergeLens` toggled at runtime)
-    // would keep its old host's z-index and either lose cascade ordering
-    // or remain merged with the wrong group.
-    if (si !== this._canvasHostStackingIndex) {
-      const previousIndex = this._canvasHostStackingIndex;
-      const nextHost = this.renderer._acquireCanvasHost(si);
+    // Migrate the canvas to the host that matches the current stacking key
+    // and current stacking-context root. This handles both:
+    //   - stackingIndex changes;
+    //   - DOM moves across different stacking contexts.
+    const { host: nextHost, hostKey: nextHostKey } =
+      this.renderer._acquireCanvasHost(si, this.element);
+    if (nextHostKey !== this._canvasHostKey) {
+      const previousHostKey = this._canvasHostKey;
       // Move the existing canvas DOM node to the new host before
       // releasing the old host's refcount: that way we never end up in
       // a transient state where the canvas is detached, which would
       // make `drawImage` paths see a 0×0 backing buffer.
       nextHost.appendChild(this.publicCanvas);
-      this._canvasHostStackingIndex = si;
-      this.renderer._releaseCanvasHost(previousIndex);
+      this._canvasHostKey = nextHostKey;
+      if (previousHostKey) this.renderer._releaseCanvasHost(previousHostKey);
+    } else {
+      // `_acquireCanvasHost` increments refcount even when host didn't
+      // change, so immediately undo the temporary retain.
+      this.renderer._releaseCanvasHost(nextHostKey);
     }
   }
 
@@ -970,7 +976,7 @@ export class AqualensLens implements AqualensLensInstance {
     }
 
     this.publicCanvas.remove();
-    this.renderer._releaseCanvasHost(this._canvasHostStackingIndex);
+    if (this._canvasHostKey) this.renderer._releaseCanvasHost(this._canvasHostKey);
     this.element.removeAttribute(LENS_DOM_ATTR);
     this.element.style.removeProperty("backdrop-filter");
     this.element.style.removeProperty("-webkit-backdrop-filter");

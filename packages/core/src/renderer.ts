@@ -274,12 +274,16 @@ export class AqualensRenderer implements AqualensRendererInstance {
   _revealMaskedU!: RevealMaskedUniforms;
 
   /**
-   * Containers that host the per-lens public canvases, one per unique
-   * `stackingIndex` value (plus a single shared container for implicit
-   * lenses keyed by {@link IMPLICIT_HOST_KEY}). Each container is a
-   * `position: fixed; inset: 0` div appended to `document.body`, so
-   * canvases inside it can be positioned at **viewport coordinates**
-   * directly via `top/left/width/height`.
+   * Containers that host the per-lens public canvases, keyed by
+   * (`stackingIndex`, nearest stacking-context ancestor). We intentionally
+   * split hosts not only by z-group but also by context root: when a lens
+   * lives inside its own stacking context (for example, a `position: fixed`
+   * bottom bar), a body-level host would paint in a different context layer
+   * and can appear above the lens's DOM content.
+   *
+   * Keeping host and lens in the same stacking context root preserves the
+   * "children above glass" guarantee without requiring user-side z-index
+   * workarounds.
    *
    * Why this design exists (the "merge drift" bug it fixes): in earlier
    * versions each lens's public canvas was a child of the lens DOM
@@ -297,6 +301,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
    * blob no matter how the lenses themselves are animated.
    */
   _canvasHosts = new Map<string, HTMLDivElement>();
+  /** Stable numeric IDs for stacking-context roots used in host keys. */
+  _canvasHostRootIds = new WeakMap<HTMLElement, number>();
+  /** Monotonic counter assigning IDs in `_canvasHostRootIds`. */
+  _canvasHostRootIdSeq = 0;
   /**
    * Canvas count per host, keyed identically to `_canvasHosts`. We keep
    * an explicit count so a host can be torn down as soon as its last
@@ -1060,29 +1068,94 @@ export class AqualensRenderer implements AqualensRendererInstance {
   // ------------------------------------------------------------------
 
   /**
-   * Build the `stackingIndex`-based key used to look up a lens's host in
-   * {@link _canvasHosts}. Returns the string form of the numeric
-   * stackingIndex for explicit lenses, or {@link IMPLICIT_HOST_KEY} when
-   * `stackingIndex` is undefined.
+   * Build the key used to look up a lens's host in {@link _canvasHosts}.
+   * The key is a tuple of:
+   *   - stacking group (`stackingIndex` or implicit sentinel), and
+   *   - nearest stacking-context ancestor ID.
+   *
+   * This ensures hosts remain in the same stacking context as their lens DOM.
    */
-  _stackingHostKey(stackingIndex: number | undefined): string {
-    return stackingIndex === undefined ? IMPLICIT_HOST_KEY : String(stackingIndex);
+  _stackingHostKey(
+    stackingIndex: number | undefined,
+    hostRoot: HTMLElement,
+  ): string {
+    const zKey =
+      stackingIndex === undefined ? IMPLICIT_HOST_KEY : String(stackingIndex);
+    const rootId = this._canvasHostRootId(hostRoot);
+    return `${zKey}::${rootId}`;
+  }
+
+  /** Assign/read a stable numeric ID for a stacking-context root element. */
+  private _canvasHostRootId(root: HTMLElement): number {
+    const existing = this._canvasHostRootIds.get(root);
+    if (existing !== undefined) return existing;
+    const next = ++this._canvasHostRootIdSeq;
+    this._canvasHostRootIds.set(root, next);
+    return next;
+  }
+
+  /**
+   * Return the nearest ancestor that establishes a stacking context.
+   * If none is found, fall back to `document.body`.
+   *
+   * The returned element is used as the insertion parent for the canvas host
+   * so host and lens participate in the same stacking context.
+   */
+  private _resolveCanvasHostRoot(element: HTMLElement): HTMLElement {
+    let node: HTMLElement | null = element.parentElement;
+    while (node && node !== document.body) {
+      const style = window.getComputedStyle(node);
+      const position = style.position;
+      const zIndex = style.zIndex;
+
+      // Fast-path checks for common stacking-context triggers.
+      if (position === "fixed" || position === "sticky") return node;
+      if (position !== "static" && zIndex !== "auto") return node;
+      if (style.opacity !== "1") return node;
+      if (style.transform !== "none") return node;
+      if (style.filter !== "none") return node;
+      if (style.backdropFilter !== "none") return node;
+      if (style.perspective !== "none") return node;
+      if (style.mixBlendMode !== "normal") return node;
+      if (style.isolation === "isolate") return node;
+      if (style.clipPath !== "none") return node;
+      if (style.mask !== "none") return node;
+      if (style.maskImage !== "none") return node;
+      if (style.contain.includes("paint") || style.contain.includes("layout")) {
+        return node;
+      }
+      if (style.willChange !== "auto") {
+        const willChange = style.willChange;
+        if (
+          willChange.includes("transform") ||
+          willChange.includes("opacity") ||
+          willChange.includes("filter") ||
+          willChange.includes("perspective")
+        ) {
+          return node;
+        }
+      }
+
+      node = node.parentElement;
+    }
+    return document.body;
   }
 
   /**
    * Lazily create (or return) the host container that owns canvases for
-   * the given stacking key. The host is appended to `document.body` so
-   * `position: fixed` resolves against the visual viewport regardless of
-   * any transformed ancestors a lens element might have.
+   * (`stackingIndex`, nearest stacking-context ancestor).
    *
    * `z-index` of the host is taken from the lens's `stackingIndex` (so
-   * cascade ordering between groups still works at the body stacking
-   * level). For implicit lenses, no `z-index` is set so they layer with
-   * surrounding non-lens DOM by tree order, matching the implicit-lens
-   * single-group semantics established in {@link render}.
+   * cascade ordering between groups still works inside a context root).
+   * For implicit lenses, no `z-index` is set so they layer with surrounding
+   * DOM in that same root by tree order.
    */
-  _acquireCanvasHost(stackingIndex: number | undefined): HTMLDivElement {
-    const key = this._stackingHostKey(stackingIndex);
+  _acquireCanvasHost(
+    stackingIndex: number | undefined,
+    lensElement: HTMLElement,
+  ): { host: HTMLDivElement; hostKey: string } {
+    const hostRoot = this._resolveCanvasHostRoot(lensElement);
+    const key = this._stackingHostKey(stackingIndex, hostRoot);
     let host = this._canvasHosts.get(key);
     if (!host) {
       host = document.createElement("div");
@@ -1097,37 +1170,34 @@ export class AqualensRenderer implements AqualensRendererInstance {
         css += `z-index:${stackingIndex * 2};`;
       }
       host.style.cssText = css;
-      // Insert at the start of body so the host comes before any
-      // user-mounted lens elements in tree order. This matters for the
-      // implicit-stackingIndex case: there host has `z-index: auto`,
-      // and at equal z-index tree order resolves the layering — host
-      // first means lens content paints above the glass canvas.
-      document.body.insertBefore(host, document.body.firstChild);
+      // Insert at the start of the stacking-context root so host comes before
+      // user-mounted lens elements in that same context. This preserves
+      // children-over-glass ordering for implicit z-index hosts.
+      hostRoot.insertBefore(host, hostRoot.firstChild);
       this._canvasHosts.set(key, host);
       this._canvasHostCounts.set(key, 0);
     }
     this._canvasHostCounts.set(key, (this._canvasHostCounts.get(key) || 0) + 1);
-    return host;
+    return { host, hostKey: key };
   }
 
   /**
-   * Decrement the refcount for the host owning `stackingIndex` and tear
-   * the host down once no canvases reference it any more. Called from
+   * Decrement the refcount for the host identified by `hostKey` and tear
+   * it down once no canvases reference it any more. Called from
    * `lens.destroy()` and when a lens migrates between hosts (see
    * `lens._syncStackingZIndex`).
    */
-  _releaseCanvasHost(stackingIndex: number | undefined): void {
-    const key = this._stackingHostKey(stackingIndex);
-    const count = this._canvasHostCounts.get(key);
+  _releaseCanvasHost(hostKey: string): void {
+    const count = this._canvasHostCounts.get(hostKey);
     if (count === undefined) return;
     if (count <= 1) {
-      const host = this._canvasHosts.get(key);
+      const host = this._canvasHosts.get(hostKey);
       if (host && host.parentNode) host.parentNode.removeChild(host);
-      this._canvasHosts.delete(key);
-      this._canvasHostCounts.delete(key);
+      this._canvasHosts.delete(hostKey);
+      this._canvasHostCounts.delete(hostKey);
       return;
     }
-    this._canvasHostCounts.set(key, count - 1);
+    this._canvasHostCounts.set(hostKey, count - 1);
   }
 
   // ------------------------------------------------------------------
