@@ -110,22 +110,40 @@ export interface SnapshotSourceConfig {
 const IMPLICIT_HOST_KEY = "__implicit__";
 
 /**
- * Build a CSS rule string for a lens-canvas host container. Each host
- * fills the visual viewport via `position: fixed; inset: 0` so the
- * canvases inside it can be positioned at viewport coordinates with
- * `position: absolute; left/top` directly. The host is `pointer-events:
- * none` so it never intercepts pointer interaction with the page below.
+ * Build a CSS rule string for a lens-canvas host container. The host is
+ * `position: absolute; top: 0; left: 0` and lives inside the lens's
+ * nearest stacking-context ancestor — i.e. it participates in the
+ * document layout the same way the lens itself does. The canvases
+ * inside use `position: absolute; left/top` relative to the host (not
+ * the visual viewport), and `_syncPublicCanvasForRegion` translates
+ * a lens's viewport CSS-pixel rect into host-local coordinates via
+ * `host.getBoundingClientRect()` before writing the inline styles.
+ *
+ * Why document-anchored hosts (and not `position: fixed; inset: 0;`):
+ * during macOS / iOS rubber-band overscroll the document content is
+ * visually pulled past its scroll boundaries, but `position: fixed`
+ * elements stay anchored to the visual viewport (they don't follow the
+ * elastic shift). With a fixed host, the public canvases were therefore
+ * stuck while the lens DOM and the rest of the page rubber-banded —
+ * producing a one-frame visual desync between the glass effect and the
+ * underlying content. An `absolute` host shares the same coordinate
+ * system as the lens DOM, so both are translated by the rubber-band
+ * compositor pass equally and stay aligned without any JS work.
+ *
+ * `pointer-events: none` keeps the host from intercepting page input.
+ * `contain: layout style` isolates the host's layout from the parent
+ * (so absolute-positioned canvases inside don't expand the document's
+ * scroll size beyond what the lens DOM already needs).
  *
  * `isolation: isolate` is intentionally NOT used: that would form a
  * stacking context for the host, which would force every canvas inside
  * to live BELOW any lens DOM at the same z-index regardless of tree
  * order. Without isolation, canvases inside the host participate in the
- * outer (body) stacking context directly, allowing per-canvas
- * z-indexing that interleaves correctly with lens elements (which are
- * also at body level w.r.t. our renderer).
+ * outer stacking context directly, allowing per-canvas z-indexing that
+ * interleaves correctly with lens elements.
  */
 const HOST_BASE_CSS =
-  "position:fixed;inset:0;pointer-events:none;contain:layout style;";
+  "position:absolute;top:0;left:0;pointer-events:none;contain:layout style;";
 
 export class AqualensRenderer implements AqualensRendererInstance {
   /**
@@ -283,7 +301,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
    *
    * Keeping host and lens in the same stacking context root preserves the
    * "children above glass" guarantee without requiring user-side z-index
-   * workarounds.
+   * workarounds. It also keeps the host in the same coordinate system as
+   * the lens DOM (both translated together by the browser during scroll
+   * and rubber-band overscroll), which is what `_syncPublicCanvasForRegion`
+   * relies on when computing canvas-vs-host offsets.
    *
    * Why this design exists (the "merge drift" bug it fixes): in earlier
    * versions each lens's public canvas was a child of the lens DOM
@@ -295,8 +316,8 @@ export class AqualensRenderer implements AqualensRendererInstance {
    * two canvases would drift apart in viewport space — producing the
    * visible "seams / doubled silhouettes" artifact during scroll.
    *
-   * Hosting all canvases in a viewport-fixed container makes their
-   * absolute screen positions independent of the lens element they
+   * Hosting all canvases in a single per-stacking-group container makes
+   * their absolute screen positions independent of the lens element they
    * decorate, guaranteeing pixel-perfect alignment across the merged
    * blob no matter how the lenses themselves are animated.
    */
@@ -311,6 +332,19 @@ export class AqualensRenderer implements AqualensRendererInstance {
    * canvas is removed (lens.destroy or stackingIndex reassignment).
    */
   _canvasHostCounts = new Map<string, number>();
+  /**
+   * Per-render-frame cache of each host's `getBoundingClientRect()`,
+   * populated by {@link _captureCanvasHostRects} at the very start of
+   * `render()` and consumed by `lens._syncPublicCanvasForRegion` when
+   * translating viewport coords to host-local coords. Avoids paying for
+   * a layout read per lens when many lenses share the same host.
+   *
+   * The cache is keyed by the host element rather than the host key
+   * string because `_syncPublicCanvasForRegion` reaches the host via
+   * `publicCanvas.parentElement` (the truth source for the canvas's
+   * current parent, see `_syncStackingZIndex` migrations).
+   */
+  _canvasHostRectCache = new Map<HTMLElement, DOMRect>();
 
   constructor(
     snapshotTarget: HTMLElement,
@@ -622,6 +656,13 @@ export class AqualensRenderer implements AqualensRendererInstance {
     if (this._isScrolling) {
       this._scrollUpdateCounter++;
     }
+
+    // Refresh the per-frame host-rect cache before any code path can
+    // call `lens._syncPublicCanvasForRegion`. The cache lets every
+    // lens convert its viewport-space rect into host-local CSS coords
+    // without each one issuing a redundant `getBoundingClientRect()`
+    // on the same shared host element.
+    this._captureCanvasHostRects();
 
     if (this.hasFullSnapshot) {
       updateDynamicVideos(this);
@@ -1069,6 +1110,22 @@ export class AqualensRenderer implements AqualensRendererInstance {
   // ------------------------------------------------------------------
   //  Canvas host lifecycle
   // ------------------------------------------------------------------
+
+  /**
+   * Read each live host's current `getBoundingClientRect()` once and
+   * cache it on {@link _canvasHostRectCache}. Called at the start of
+   * `render()` so every lens that subsequently calls
+   * `_syncPublicCanvasForRegion` can translate its viewport rect into
+   * host-local CSS coordinates without re-reading the same host's
+   * layout. The cache is invalidated implicitly each frame (overwritten
+   * by the next call).
+   */
+  private _captureCanvasHostRects(): void {
+    this._canvasHostRectCache.clear();
+    for (const host of this._canvasHosts.values()) {
+      this._canvasHostRectCache.set(host, host.getBoundingClientRect());
+    }
+  }
 
   /**
    * Build the key used to look up a lens's host in {@link _canvasHosts}.

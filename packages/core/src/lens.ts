@@ -33,12 +33,12 @@ export class AqualensLens implements AqualensLensInstance {
    *
    * **Crucial layout detail** — this canvas does NOT live inside
    * `lens.element`. Instead it sits in a renderer-managed host container
-   * (`<div data-aqualens-host>`) that is `position: fixed; inset: 0`
-   * attached to the lens's nearest stacking-context ancestor. The canvas
-   * itself uses `position: absolute` with
-   * top/left/width/height in **viewport CSS pixels**, fully independent
-   * of the lens host element's own positioning, transform or CSS
-   * animations.
+   * (`<div data-aqualens-host>`) that is `position: absolute; top: 0;
+   * left: 0` attached to the lens's nearest stacking-context ancestor.
+   * The canvas itself uses `position: absolute` with top/left/width/height
+   * expressed in **CSS pixels relative to the host's containing block**,
+   * fully independent of the lens host element's own positioning,
+   * transform or CSS animations.
    *
    * This decoupling fixes a class of merge-mode artifacts ("seams" /
    * "doubled silhouettes") that occurred whenever lenses in the same
@@ -46,20 +46,31 @@ export class AqualensLens implements AqualensLensInstance {
    * frames: when the canvas was a child of the lens, parent transforms
    * (scroll-driven animations, `transform: translate(-50%, -50%)` etc.)
    * would shift the canvas relative to the rendered blob, while sibling
-   * canvases remained in place. Hosting in a fixed container makes
+   * canvases remained in place. Hosting in a shared host container makes
    * canvas screen position depend only on what we explicitly set during
    * `_syncPublicCanvasForRegion`.
    *
+   * Why `position: absolute` (and not `position: fixed`): a fixed host
+   * stays anchored to the visual viewport, but during macOS / iOS
+   * rubber-band overscroll the document is visually pulled past the
+   * scroll boundaries while fixed elements stay put. The lens DOM
+   * (assuming it lives in normal flow) follows the rubber-band, the
+   * fixed canvas does not, and the two visually drift apart for as long
+   * as the bounce animation runs. An absolute host is part of the
+   * document layout and the browser's compositor translates it together
+   * with the lens DOM during rubber-band — keeping the canvas pixel-
+   * aligned with the underlying content with no JS intervention.
+   *
    * Stacking semantics (so lens DOM children still paint above the glass
-   * effect): each host is itself at body level with `z-index =
-   * stackingIndex`, and each lens host element gets the same
-   * `stackingIndex` (via `_syncStackingZIndex`). At equal z-index, tree
-   * order resolves the layering — and we deliberately keep the host
-   * appended BEFORE lens elements through `addLens` ordering guarantees,
-   * which puts the host (and its canvases) below the lens stacking
-   * context. For implicit (no stackingIndex) lenses both the host and
-   * the lens stay at default z-index, so they participate in the
-   * surrounding flow stacking via tree order alone.
+   * effect): each host gets `z-index = stackingIndex * 2` and the lens
+   * DOM element gets `stackingIndex * 2 + 1` (via `_syncStackingZIndex`),
+   * so the lens always paints above its glass canvas in the same
+   * stacking context. For implicit (no stackingIndex) lenses both the
+   * host and the lens stay at default z-index, so they participate in
+   * the surrounding flow stacking via tree order alone — and we
+   * deliberately keep the host appended BEFORE the lens through
+   * `addLens` ordering guarantees, which puts the host (and its
+   * canvases) below the lens.
    */
   publicCanvas: HTMLCanvasElement;
   publicCtx: CanvasRenderingContext2D;
@@ -68,7 +79,7 @@ export class AqualensLens implements AqualensLensInstance {
   /**
    * Whether we installed `isolation: isolate` on the lens host element.
    * The canvas itself no longer needs it (it lives in the renderer's
-   * fixed-position host container, see `publicCanvas` above), but the
+   * shared host container, see `publicCanvas` above), but the
    * startup-fallback DOM does: the fallback glare uses an extreme
    * `z-index` to stay above all lens content, which would otherwise leak
    * past the lens and overlay neighbouring stacking contexts.
@@ -78,14 +89,16 @@ export class AqualensLens implements AqualensLensInstance {
   publicCanvasW = 0;
   publicCanvasH = 0;
   /**
-   * CSS-pixel viewport-space top-left of the public canvas. Drives the
-   * canvas's inline `left` / `top` styles directly: because the host
-   * container is a `position: fixed; inset: 0` div, an `absolute`
-   * positioned canvas inside it places its origin at the host's
-   * top-left, which equals the visual viewport's top-left.
+   * CSS-pixel host-local top-left of the public canvas — i.e. the
+   * value written to the canvas's inline `left` / `top` styles. The
+   * canvas is `position: absolute` inside a host container that lives
+   * in document layout, so these are offsets from the host's top-left,
+   * NOT from the visual viewport's top-left. They get derived from the
+   * lens's viewport-space rect in `_syncPublicCanvasForRegion` by
+   * subtracting the host's current `getBoundingClientRect()`.
    */
-  publicCanvasViewportLeft = 0;
-  publicCanvasViewportTop = 0;
+  publicCanvasLocalLeft = 0;
+  publicCanvasLocalTop = 0;
   /** CSS-pixel size the canvas currently occupies. */
   publicCanvasCssWidth = 0;
   publicCanvasCssHeight = 0;
@@ -208,14 +221,16 @@ export class AqualensLens implements AqualensLensInstance {
     this._updateTintFromCss();
 
     // Build the per-lens public canvas. The canvas is `position: absolute`
-    // inside a viewport-fixed host container (see `publicCanvas` doc
+    // inside a document-anchored host container (see `publicCanvas` doc
     // comment for the rationale): top/left/width/height in inline style
-    // are interpreted in CSS pixels of the visual viewport.
+    // are interpreted in CSS pixels relative to the host's containing
+    // block, computed in `_syncPublicCanvasForRegion` from the lens's
+    // viewport rect minus the host's current viewport rect.
     //
     // Stacking-context handling: with the canvas no longer inside the
     // lens DOM, the lens itself doesn't need `isolation: isolate` for
-    // canvas-vs-content layering — that's handled at body level via
-    // matching `z-index` between host and lens (see `_syncStackingZIndex`).
+    // canvas-vs-content layering — that's handled via matching `z-index`
+    // between host and lens (see `_syncStackingZIndex`).
     this.publicCanvas = document.createElement("canvas");
     this.publicCanvas.setAttribute("data-aqualens-canvas", "");
     this.publicCanvas.setAttribute("data-aqualens-ignore", "");
@@ -603,10 +618,32 @@ export class AqualensLens implements AqualensLensInstance {
   /**
    * Resize and reposition the public canvas to match a given viewport
    * region (in CSS pixels relative to the visual viewport's top-left).
-   * Because the canvas lives in a `position: fixed; inset: 0` host
-   * container and is itself `position: absolute`, the region's
-   * `left/top` map directly to the canvas's inline `left/top` styles —
-   * no parent-relative offset arithmetic is needed.
+   *
+   * The canvas lives in a `position: absolute; top: 0; left: 0;` host
+   * container that participates in document layout (see
+   * {@link publicCanvas}). Setting `style.left = regionLeft` directly
+   * would interpret the value as host-local CSS pixels, NOT viewport
+   * pixels — so we read the host's current viewport rect and convert:
+   *
+   *   localLeft = regionLeft - hostRect.left
+   *   localTop  = regionTop  - hostRect.top
+   *
+   * For a body-level host (the common case for non-fixed lenses) the
+   * host's viewport rect is `(-scrollX, -scrollY)`, which makes the
+   * stored local offsets effectively document-space (`rect.left +
+   * scrollX`). The benefit of computing them as a delta against the
+   * live host rect is that the same arithmetic also works when the
+   * host's containing block is a `position: fixed` ancestor (the
+   * lens's stacking context), a transform parent, or anything else
+   * that establishes its own positioned containing block.
+   *
+   * It also means rubber-band overscroll on macOS / iOS does NOT
+   * require the canvas to be repositioned per frame: the host moves
+   * with the page just like the lens DOM, both viewport rects shift
+   * by the same amount, the difference stays constant, and the
+   * compositor pass keeps the canvas glued to the lens visually
+   * without any JS work — which is the whole reason this method now
+   * stores host-local rather than viewport coordinates.
    *
    * Callers:
    *  - single-lens path: lens rect ± shadowPad (see {@link _syncPublicCanvasSize});
@@ -640,13 +677,38 @@ export class AqualensLens implements AqualensLensInstance {
     const backingWidth = Math.max(1, Math.ceil(regionWidth * dpr));
     const backingHeight = Math.max(1, Math.ceil(regionHeight * dpr));
 
-    if (regionLeft !== this.publicCanvasViewportLeft) {
-      this.publicCanvas.style.left = `${regionLeft}px`;
-      this.publicCanvasViewportLeft = regionLeft;
+    // Translate viewport CSS coords to host-local CSS coords. With an
+    // `position: absolute` host that lives in document layout, the
+    // canvas's inline `left/top` are interpreted relative to the host's
+    // containing block — we cannot just write `regionLeft` directly.
+    // The host rect is read from a per-frame cache populated by
+    // {@link AqualensRenderer._captureCanvasHostRects} (called once at
+    // the start of every render frame) so multiple lenses sharing a
+    // host don't each pay for a layout flush.
+    const host = this.publicCanvas.parentElement as HTMLElement | null;
+    let hostLeft = 0;
+    let hostTop = 0;
+    if (host) {
+      const cachedRect = this.renderer._canvasHostRectCache.get(host);
+      if (cachedRect) {
+        hostLeft = cachedRect.left;
+        hostTop = cachedRect.top;
+      } else {
+        const hostRect = host.getBoundingClientRect();
+        hostLeft = hostRect.left;
+        hostTop = hostRect.top;
+      }
     }
-    if (regionTop !== this.publicCanvasViewportTop) {
-      this.publicCanvas.style.top = `${regionTop}px`;
-      this.publicCanvasViewportTop = regionTop;
+    const localLeft = regionLeft - hostLeft;
+    const localTop = regionTop - hostTop;
+
+    if (localLeft !== this.publicCanvasLocalLeft) {
+      this.publicCanvas.style.left = `${localLeft}px`;
+      this.publicCanvasLocalLeft = localLeft;
+    }
+    if (localTop !== this.publicCanvasLocalTop) {
+      this.publicCanvas.style.top = `${localTop}px`;
+      this.publicCanvasLocalTop = localTop;
     }
     if (regionWidth !== this.publicCanvasCssWidth) {
       this.publicCanvas.style.width = `${regionWidth}px`;

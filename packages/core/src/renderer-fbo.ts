@@ -684,14 +684,16 @@ function copyMergedGroupToPublicCanvases(
  * once into one "primary" lens canvas and reset the other members to
  * zero size — see `copyMergedGroupToPublicCanvases` for why.
  *
- * Because every public canvas is hosted in a viewport-fixed container
+ * Because every public canvas is hosted in a shared host container
  * rather than as a child of its lens element, canvas screen position
  * does not depend on how the lens host is animated. This eliminates the
  * "seam / doubled silhouette" artifact that used to appear during
  * scroll when one merged lens was driven by a CSS scroll-driven
  * animation (`animation-timeline: scroll(...)`) while another was
  * static — the canvases would otherwise drift apart in viewport space
- * between renders.
+ * between renders. The host is `position: absolute` (document-anchored)
+ * so it follows macOS / iOS rubber-band overscroll together with the
+ * lens DOM, which `position: fixed` would not.
  */
 export function copyLensRegionsToPublicCanvases(
   renderer: AqualensRenderer,
