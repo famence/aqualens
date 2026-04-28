@@ -92,12 +92,12 @@ renderer.addDynamicElement(movingNode);
 // or multiple / selector string overloads
 ```
 
-## Reveal overlays (`data-liquid-reveal-*`)
+## Reveal overlays (`data-aqualens-reveal-*`)
 
 The renderer supports a reveal layer API for "Apple Music style" tab indicators and similar UI, where alternate content is shown only when a lens with a high-enough stacking index is present.
 
-- `data-liquid-reveal-index="{number}"` — required; threshold value used by the renderer to decide whether the reveal is eligible for a lens/group.
-- `data-liquid-reveal-mode="under-lens" | "on-lens"` — optional; default is `under-lens`.
+- `data-aqualens-reveal-index="{number}"` — required; threshold value used by the renderer to decide whether the reveal is eligible for a lens/group.
+- `data-aqualens-reveal-mode="under-lens" | "on-lens"` — optional; default is `under-lens`.
 
 ```html
 <!-- Base label (normal content) -->
@@ -105,8 +105,8 @@ The renderer supports a reveal layer API for "Apple Music style" tab indicators 
 
 <!-- Reveal label (alternate colored content) -->
 <div
-  data-liquid-reveal-index="11"
-  data-liquid-reveal-mode="on-lens"
+  data-aqualens-reveal-index="11"
+  data-aqualens-reveal-mode="on-lens"
   class="tab-label tab-label--accent"
 >
   Genres
@@ -121,7 +121,7 @@ Mode behavior:
 
 Migration note:
 
-- Rename legacy `data-liquid-reveal` to `data-liquid-reveal-index`.
+- Rename legacy `data-liquid-reveal` to `data-aqualens-reveal-index`.
 
 ## Power-save mode (lighter GPU path)
 

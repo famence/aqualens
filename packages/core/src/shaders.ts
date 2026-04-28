@@ -127,7 +127,7 @@ void main() {
 
 /**
  * Samples a reveal-element capture and outputs it clipped by the lens group's
- * SDF shape. Used to paint `data-liquid-reveal-mode="on-lens"` reveals on top
+ * SDF shape. Used to paint `data-aqualens-reveal-mode="on-lens"` reveals on top
  * of the already-rendered lens so the reveal content appears INSIDE the glass.
  *
  * The shader runs in the same viewport as the lens render pass and therefore

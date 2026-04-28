@@ -98,7 +98,7 @@ export function enableResizeFallback(renderer: AqualensRenderer): void {
     element.style.isolation = "isolate";
 
     const tint = document.createElement("div");
-    tint.setAttribute("data-liquid-resize-fallback", "");
+    tint.setAttribute("data-aqualens-resize-fallback", "");
     tint.style.cssText =
       "position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;";
     const tintColor = options.tint;
@@ -109,7 +109,7 @@ export function enableResizeFallback(renderer: AqualensRenderer): void {
     element.appendChild(tint);
 
     const glare = document.createElement("div");
-    glare.setAttribute("data-liquid-resize-fallback", "");
+    glare.setAttribute("data-aqualens-resize-fallback", "");
     glare.style.cssText =
       "position:absolute;inset:0;z-index:2147483647;pointer-events:none;border-radius:inherit;overflow:hidden;";
 
@@ -205,8 +205,8 @@ export async function captureSnapshotImpl(
       return true;
     }
     return !!(
-      el.hasAttribute("data-liquid-ignore") ||
-      (typeof el.closest === "function" && el.closest("[data-liquid-ignore]"))
+      el.hasAttribute("data-aqualens-ignore") ||
+      (typeof el.closest === "function" && el.closest("[data-aqualens-ignore]"))
     );
   };
 

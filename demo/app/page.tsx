@@ -53,9 +53,9 @@ export default function DemoPage() {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
     if (powerSave) {
-      root.setAttribute("data-liquid-power-save", "true");
+      root.setAttribute("data-aqualens-power-save", "true");
     } else {
-      root.removeAttribute("data-liquid-power-save");
+      root.removeAttribute("data-aqualens-power-save");
     }
   }, [powerSave]);
 
@@ -125,7 +125,7 @@ export default function DemoPage() {
             </p>
 
             <h2
-              data-liquid-reveal-index={1}
+              data-aqualens-reveal-index={1}
               className="text-7xl md:text-8xl font-black uppercase leading-[0.9] text-white"
             >
               only under

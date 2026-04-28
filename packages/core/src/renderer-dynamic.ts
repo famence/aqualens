@@ -10,7 +10,7 @@ export function isIgnored(element: HTMLElement): boolean {
   return !!(
     element &&
     typeof element.closest === "function" &&
-    element.closest("[data-liquid-ignore]")
+    element.closest("[data-aqualens-ignore]")
   );
 }
 
@@ -437,7 +437,7 @@ export function discoverAndAddFixedElements(
     ) {
       continue;
     }
-    if (htmlElement.closest?.("[data-liquid-ignore]")) continue;
+    if (htmlElement.closest?.("[data-aqualens-ignore]")) continue;
     const style = window.getComputedStyle(element);
     if (style.position === "fixed") {
       addDynamicElementImpl(renderer, htmlElement, {
@@ -537,7 +537,7 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
         ignoreElements: (ignoredElement: Element) => {
           if (ignoredElement.tagName === "CANVAS") return true;
           const el = ignoredElement as HTMLElement;
-          if (el.hasAttribute("data-liquid-ignore")) return true;
+          if (el.hasAttribute("data-aqualens-ignore")) return true;
           // Lens roots (and their entire subtree) must be excluded so a
           // recapture of a fixed wrapper that contains lenses does not
           // bake the lens content into the snapshot texture — otherwise
@@ -774,7 +774,7 @@ export function addDynamicElementImpl(
 
   const element = elementOrSelector as HTMLElement;
   if (!element.getBoundingClientRect) return;
-  if (element.closest && element.closest("[data-liquid-ignore]")) return;
+  if (element.closest && element.closest("[data-aqualens-ignore]")) return;
   if (renderer._dynamicNodes.some((node) => node.element === element)) return;
 
   renderer._dynamicNodes = renderer._dynamicNodes.filter(
@@ -1007,7 +1007,7 @@ const MAX_CONCURRENT_LENS_CONTENT_CAPTURE = 2;
 /**
  * True when the lens DOM has anything `triggerLensContentCaptures` would
  * actually want to bake into a snapshot. We mirror html2canvas's
- * `ignoreElements` predicate (canvas, `[data-liquid-ignore]`, descendant
+ * `ignoreElements` predicate (canvas, `[data-aqualens-ignore]`, descendant
  * lenses) so that a lens whose only descendants are excluded does not
  * spawn a useless html2canvas pass — html2canvas-pro can return a 0×0
  * canvas for an "all-children-excluded" subtree, which would prevent
@@ -1032,7 +1032,7 @@ function lensHasCapturableContent(lensElement: HTMLElement): boolean {
     const el = node as HTMLElement;
     if (el.tagName === "CANVAS") continue;
     if (typeof el.hasAttribute === "function" &&
-      el.hasAttribute("data-liquid-ignore")
+      el.hasAttribute("data-aqualens-ignore")
     ) {
       continue;
     }
@@ -1086,7 +1086,7 @@ export function triggerLensContentCaptures(
       ignoreElements: (el: Element) => {
         if (el.tagName === "CANVAS") return true;
         const htmlEl = el as HTMLElement;
-        if (htmlEl.hasAttribute("data-liquid-ignore")) return true;
+        if (htmlEl.hasAttribute("data-aqualens-ignore")) return true;
         // Skip any descendant lens — its DOM content is captured by
         // its own snapshot pass. Without this exclusion, a parent
         // lens's content snapshot would re-bake nested lenses (and

@@ -89,7 +89,7 @@ import {
 // compositing to hide the whole subtree on the live page, and
 // `pointer-events: none` prevents interaction (inherited by children).
 const DYNAMIC_STYLES_CSS = `
-html:not([data-liquid-power-save="true"]) ${REVEAL_CSS_SELECTOR} {
+html:not([data-aqualens-power-save="true"]) ${REVEAL_CSS_SELECTOR} {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -321,7 +321,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
     // ever sees are the per-lens `publicCanvas` siblings created by
     // `AqualensLens`.
     this.canvas = document.createElement("canvas");
-    this.canvas.setAttribute("data-liquid-ignore", "");
+    this.canvas.setAttribute("data-aqualens-ignore", "");
 
     const ctxAttribs: WebGLContextAttributes = {
       alpha: true,
@@ -1160,7 +1160,7 @@ export class AqualensRenderer implements AqualensRendererInstance {
     if (!host) {
       host = document.createElement("div");
       host.setAttribute("data-aqualens-host", "");
-      host.setAttribute("data-liquid-ignore", "");
+      host.setAttribute("data-aqualens-ignore", "");
       let css = HOST_BASE_CSS;
       if (stackingIndex !== undefined) {
         // Keep host one layer below lens DOM at the same stackingIndex.

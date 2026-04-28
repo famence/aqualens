@@ -19,7 +19,7 @@ import type { AqualensLens } from "./lens";
 export type RevealMode = "under-lens" | "on-lens";
 
 /**
- * Metadata tracked for each element carrying a `data-liquid-reveal-index`
+ * Metadata tracked for each element carrying a `data-aqualens-reveal-index`
  * attribute. The attribute value is a number that gates which lenses are
  * allowed to reveal the element: a lens reveals it only when its
  * `stackingIndex` is greater than or equal to `revealValue`.
@@ -36,9 +36,9 @@ export interface RevealMeta {
 const MAX_CONCURRENT_REVEAL_CAPTURE = 2;
 
 /** Attribute that gates a reveal by stacking-index (numeric). */
-const REVEAL_INDEX_ATTR = "data-liquid-reveal-index";
+const REVEAL_INDEX_ATTR = "data-aqualens-reveal-index";
 /** Attribute that picks the compositing mode (`under-lens` | `on-lens`). */
-const REVEAL_MODE_ATTR = "data-liquid-reveal-mode";
+const REVEAL_MODE_ATTR = "data-aqualens-reveal-mode";
 /** Shared selector: any element with a numeric reveal-index attribute. */
 const REVEAL_SELECTOR = `[${REVEAL_INDEX_ATTR}]`;
 
@@ -73,7 +73,7 @@ export function discoverReveals(renderer: AqualensRenderer): void {
 
   const seen = new Set<HTMLElement>();
   for (const element of Array.from(nodes)) {
-    if (element.closest("[data-liquid-ignore]")) continue;
+    if (element.closest("[data-aqualens-ignore]")) continue;
     const value = parseRevealValue(element.getAttribute(REVEAL_INDEX_ATTR));
     if (value === null) continue;
     const mode = parseRevealMode(element.getAttribute(REVEAL_MODE_ATTR));
@@ -131,7 +131,7 @@ export function triggerRevealCaptures(renderer: AqualensRenderer): void {
       logging: false,
       ignoreElements: (el: Element) =>
         el.tagName === "CANVAS" ||
-        (el as HTMLElement).hasAttribute("data-liquid-ignore"),
+        (el as HTMLElement).hasAttribute("data-aqualens-ignore"),
       onclone: (clonedDoc: Document) => {
         const liquidStyles = clonedDoc.getElementById(
           "liquid-gl-dynamic-styles",

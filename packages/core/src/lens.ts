@@ -218,7 +218,7 @@ export class AqualensLens implements AqualensLensInstance {
     // matching `z-index` between host and lens (see `_syncStackingZIndex`).
     this.publicCanvas = document.createElement("canvas");
     this.publicCanvas.setAttribute("data-aqualens-canvas", "");
-    this.publicCanvas.setAttribute("data-liquid-ignore", "");
+    this.publicCanvas.setAttribute("data-aqualens-ignore", "");
     this.publicCanvas.style.cssText =
       "position:absolute;pointer-events:none;left:0;top:0;width:0;height:0;";
     const ctx = this.publicCanvas.getContext("2d");
@@ -865,7 +865,7 @@ export class AqualensLens implements AqualensLensInstance {
     );
 
     const tint = document.createElement("div");
-    tint.setAttribute("data-liquid-startup-fallback", "");
+    tint.setAttribute("data-aqualens-startup-fallback", "");
     tint.style.cssText =
       "position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;";
     const tintColor = this.options.tint;
@@ -877,7 +877,7 @@ export class AqualensLens implements AqualensLensInstance {
     this._startupFallbackTint = tint;
 
     const glare = document.createElement("div");
-    glare.setAttribute("data-liquid-startup-fallback", "");
+    glare.setAttribute("data-aqualens-startup-fallback", "");
     glare.style.cssText =
       "position:absolute;inset:0;z-index:2147483647;pointer-events:none;border-radius:inherit;overflow:hidden;";
     const glareOptions = this.options.glare;
