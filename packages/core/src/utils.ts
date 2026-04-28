@@ -9,6 +9,41 @@ export function debounce<T extends (...args: unknown[]) => void>(
   };
 }
 
+/**
+ * CSS rule injected into the cloned document of every html2canvas pass so
+ * elements marked with `data-aqualens-ignore` render as visually empty
+ * (opacity 0) WITHOUT being structurally removed from the clone.
+ *
+ * Why this matters: forwarding `data-aqualens-ignore` to html2canvas's
+ * `ignoreElements` option causes the cloner to skip those nodes entirely,
+ * which breaks any layout that depends on them — e.g. a lens whose
+ * intrinsic width is established by a wrapped tab list. Marking the
+ * wrapper `data-aqualens-ignore` and removing it from the clone collapses
+ * the lens, and any absolutely-positioned reveal sized via `inset: 1`
+ * inside that lens shrinks to a 0×0 box. The reveal capture then comes
+ * out empty, and the on-lens overlay never paints. Keeping the element in
+ * the clone but masking it with `opacity: 0` preserves surrounding layout
+ * while still keeping the marked subtree's pixels out of the captured
+ * image (children are masked by the parent's compositing alpha).
+ *
+ * `pointer-events: none` is included for parity with the live-DOM
+ * dynamic-styles rule used for reveal elements; it has no visual effect
+ * but keeps cloned subtrees inert in case anything tries to hit-test them.
+ */
+const SNAPSHOT_HIDE_RULE =
+  "[data-aqualens-ignore]{opacity:0 !important;pointer-events:none !important;}";
+
+/**
+ * Inject {@link SNAPSHOT_HIDE_RULE} into the cloned document. Safe to call
+ * from any html2canvas `onclone` callback.
+ */
+export function injectSnapshotHideStyles(clonedDoc: Document): void {
+  const style = clonedDoc.createElement("style");
+  style.setAttribute("data-aqualens-snapshot-style", "");
+  style.textContent = SNAPSHOT_HIDE_RULE;
+  clonedDoc.head.appendChild(style);
+}
+
 export function effectiveZ(element: HTMLElement): number {
   let node: HTMLElement | null = element;
   while (node && node !== document.body) {

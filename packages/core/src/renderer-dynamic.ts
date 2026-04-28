@@ -1,5 +1,5 @@
 import html2canvas from "html2canvas-pro";
-import { effectiveZ, parseTransform } from "./utils";
+import { effectiveZ, parseTransform, injectSnapshotHideStyles } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import type { DynMeta } from "./gl-utils";
 import { LENS_DOM_ATTR } from "./lens";
@@ -537,7 +537,6 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
         ignoreElements: (ignoredElement: Element) => {
           if (ignoredElement.tagName === "CANVAS") return true;
           const el = ignoredElement as HTMLElement;
-          if (el.hasAttribute("data-aqualens-ignore")) return true;
           // Lens roots (and their entire subtree) must be excluded so a
           // recapture of a fixed wrapper that contains lenses does not
           // bake the lens content into the snapshot texture — otherwise
@@ -548,9 +547,15 @@ export function updateDynamicNodes(renderer: AqualensRenderer): void {
           ) {
             return true;
           }
+          // `data-aqualens-ignore` is masked via the `SNAPSHOT_HIDE_RULE`
+          // injected in onclone so the marked subtree stays in the clone
+          // (preserving its layout impact) but renders as visually empty.
           return false;
         },
-        onclone: objectFitPatch.onclone,
+        onclone: (clonedDoc: Document) => {
+          objectFitPatch.onclone(clonedDoc);
+          injectSnapshotHideStyles(clonedDoc);
+        },
       })
         .then((capturedCanvas) => {
           if (capturedCanvas.width > 0 && capturedCanvas.height > 0) {
@@ -1086,7 +1091,6 @@ export function triggerLensContentCaptures(
       ignoreElements: (el: Element) => {
         if (el.tagName === "CANVAS") return true;
         const htmlEl = el as HTMLElement;
-        if (htmlEl.hasAttribute("data-aqualens-ignore")) return true;
         // Skip any descendant lens — its DOM content is captured by
         // its own snapshot pass. Without this exclusion, a parent
         // lens's content snapshot would re-bake nested lenses (and
@@ -1097,9 +1101,16 @@ export function triggerLensContentCaptures(
             return true;
           }
         }
+        // `data-aqualens-ignore` is masked via the `SNAPSHOT_HIDE_RULE`
+        // injected in onclone so the marked subtree stays in the clone
+        // (preserving the lens's intrinsic-width layout) but renders
+        // as visually empty in the cascade content capture.
         return false;
       },
-      onclone: objectFitPatch.onclone,
+      onclone: (clonedDoc: Document) => {
+        objectFitPatch.onclone(clonedDoc);
+        injectSnapshotHideStyles(clonedDoc);
+      },
     })
       .then((canvas) => {
         if (canvas.width > 0 && canvas.height > 0) {

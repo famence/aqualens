@@ -1,6 +1,7 @@
 import html2canvas from "html2canvas-pro";
 import type { AqualensRenderer } from "./renderer";
 import type { AqualensLens } from "./lens";
+import { injectSnapshotHideStyles } from "./utils";
 
 /**
  * Reveal compositing mode.
@@ -31,6 +32,25 @@ export interface RevealMeta {
   capture: HTMLCanvasElement | null;
   needsRecapture: boolean;
   _capturing: boolean;
+  /**
+   * Per-element ResizeObserver. Without it, a reveal whose layout changes
+   * (e.g. a navbar collapsing its tabs from `w-18` to `w-12.5` via CSS
+   * classes) keeps its original-size capture and stretches it into the new,
+   * smaller rect — producing a visually "compressed" content (all the
+   * original tabs squeezed into the now-tiny lens). The observer fires when
+   * the reveal element's box changes, which is exactly the moment we need
+   * to re-run html2canvas so the next frame samples a freshly rendered
+   * snapshot at the new aspect ratio.
+   */
+  _resizeObserver: ResizeObserver | null;
+  /**
+   * Last size seen by the resize observer. Used to suppress the spurious
+   * "initial fire" that ResizeObserver dispatches synchronously after
+   * `observe()`, so we don't queue a redundant html2canvas pass on top of
+   * the very first capture that just kicked off when the meta was added.
+   */
+  _lastObservedW: number;
+  _lastObservedH: number;
 }
 
 const MAX_CONCURRENT_REVEAL_CAPTURE = 2;
@@ -62,6 +82,53 @@ function parseRevealMode(raw: string | null): RevealMode {
 }
 
 /**
+ * Attach a ResizeObserver to a reveal element so a layout change on the
+ * element (the tracked reveal subtree changes its rendered size — a
+ * navbar collapsing its tabs, a flex item shrinking, a media query
+ * crossing its breakpoint, …) triggers a fresh html2canvas pass on the
+ * next render frame. Without this, the cached capture is stretched into
+ * the new, smaller rect by `compositeRevealsForStackingIndex` /
+ * `compositeRevealsOnLensForGroup` and the user sees the original wide
+ * content squeezed into the now-tiny lens.
+ *
+ * ResizeObserver dispatches a synchronous initial entry right after
+ * `observe()` even when nothing has actually changed. We seed
+ * `_lastObservedW/H` with the current rect and ignore any callback whose
+ * dimensions match it, so the first useful html2canvas pass — already
+ * scheduled by the freshly-set `needsRecapture: true` — is not duplicated.
+ */
+function attachRevealResizeObserver(
+  renderer: AqualensRenderer,
+  meta: RevealMeta,
+): void {
+  if (typeof ResizeObserver === "undefined") return;
+
+  const observer = new ResizeObserver(() => {
+    if (renderer._destroyed) return;
+    // Use getBoundingClientRect() so the comparison happens in the same
+    // border-box-inclusive coordinate space as `_lastObservedW/H` (which
+    // are seeded from getBoundingClientRect() at meta creation time).
+    // ResizeObserverEntry.contentRect would expose the content box, which
+    // diverges from the seed by 2 * padding + 2 * border for any reveal
+    // element that carries non-zero padding or borders, producing a
+    // spurious "size changed" callback on the very first observe() fire.
+    const rect = meta.element.getBoundingClientRect();
+    if (
+      Math.abs(rect.width - meta._lastObservedW) < 0.5 &&
+      Math.abs(rect.height - meta._lastObservedH) < 0.5
+    ) {
+      return;
+    }
+    meta._lastObservedW = rect.width;
+    meta._lastObservedH = rect.height;
+    meta.needsRecapture = true;
+    renderer.requestRender();
+  });
+  observer.observe(meta.element);
+  meta._resizeObserver = observer;
+}
+
+/**
  * Scan the snapshot target for reveal elements and reconcile them with the
  * renderer's tracked list. Newly discovered elements get a pending capture;
  * elements that were removed from the DOM are dropped. Changes to either the
@@ -90,21 +157,35 @@ export function discoverReveals(renderer: AqualensRenderer): void {
         existing.needsRecapture = true;
       }
     } else {
-      renderer._revealNodes.push({
+      const initialRect = element.getBoundingClientRect();
+      const meta: RevealMeta = {
         element,
         revealValue: value,
         mode,
         capture: null,
         needsRecapture: true,
         _capturing: false,
-      });
+        _resizeObserver: null,
+        _lastObservedW: initialRect.width,
+        _lastObservedH: initialRect.height,
+      };
+      attachRevealResizeObserver(renderer, meta);
+      renderer._revealNodes.push(meta);
     }
   }
 
   if (renderer._revealNodes.length > 0) {
-    renderer._revealNodes = renderer._revealNodes.filter(
-      (reveal) => seen.has(reveal.element) && reveal.element.isConnected,
-    );
+    const removed: RevealMeta[] = [];
+    renderer._revealNodes = renderer._revealNodes.filter((reveal) => {
+      const stillTracked =
+        seen.has(reveal.element) && reveal.element.isConnected;
+      if (!stillTracked) removed.push(reveal);
+      return stillTracked;
+    });
+    for (const reveal of removed) {
+      reveal._resizeObserver?.disconnect();
+      reveal._resizeObserver = null;
+    }
   }
 }
 
@@ -121,6 +202,15 @@ export function triggerRevealCaptures(renderer: AqualensRenderer): void {
       return;
 
     reveal._capturing = true;
+    // Clear the flag BEFORE html2canvas runs (mirrors the dynamic-node
+    // capture path) so that a foreign re-invalidation during the
+    // in-flight pass — typically a ResizeObserver fire mid-transition
+    // when the reveal element keeps shrinking — stays observable on the
+    // next render frame and queues a fresh capture against the new size.
+    // Clearing it after .then() would let the just-finished pass overwrite
+    // a true => false transition that happened during the capture,
+    // freezing the reveal at the intermediate size.
+    reveal.needsRecapture = false;
     renderer._revealCaptureInFlight += 1;
 
     html2canvas(reveal.element, {
@@ -129,9 +219,16 @@ export function triggerRevealCaptures(renderer: AqualensRenderer): void {
       useCORS: true,
       removeContainer: true,
       logging: false,
-      ignoreElements: (el: Element) =>
-        el.tagName === "CANVAS" ||
-        (el as HTMLElement).hasAttribute("data-aqualens-ignore"),
+      // `data-aqualens-ignore` is intentionally NOT in `ignoreElements`:
+      // siblings of the reveal element may carry that attribute (typically
+      // an "underlying" copy of the same DOM excluded from the lens
+      // content cascade), and removing them from the clone collapses the
+      // parent lens, which in turn collapses the absolutely-positioned
+      // reveal element to 0×0. The `SNAPSHOT_HIDE_RULE` injected via
+      // `injectSnapshotHideStyles` masks them visually instead, keeping
+      // the clone's layout faithful to the live page while still keeping
+      // the marked subtree's pixels out of the captured reveal canvas.
+      ignoreElements: (el: Element) => el.tagName === "CANVAS",
       onclone: (clonedDoc: Document) => {
         const liquidStyles = clonedDoc.getElementById(
           "liquid-gl-dynamic-styles",
@@ -140,12 +237,12 @@ export function triggerRevealCaptures(renderer: AqualensRenderer): void {
         const override = clonedDoc.createElement("style");
         override.textContent = `html ${REVEAL_SELECTOR}{opacity:1 !important;pointer-events:auto !important;display:revert !important;}`;
         clonedDoc.head.appendChild(override);
+        injectSnapshotHideStyles(clonedDoc);
       },
     })
       .then((canvas) => {
         if (canvas.width > 0 && canvas.height > 0) {
           reveal.capture = canvas;
-          reveal.needsRecapture = false;
         }
       })
       .catch(() => {})
@@ -551,6 +648,10 @@ export function destroyRevealResources(renderer: AqualensRenderer): void {
   }
   renderer._revealUploadTexW = 0;
   renderer._revealUploadTexH = 0;
+  for (const reveal of renderer._revealNodes) {
+    reveal._resizeObserver?.disconnect();
+    reveal._resizeObserver = null;
+  }
   renderer._revealNodes = [];
   renderer._revealComposited.clear();
   renderer._revealCaptureInFlight = 0;

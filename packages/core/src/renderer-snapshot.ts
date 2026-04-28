@@ -4,6 +4,7 @@ import { ensureBlurPyramid } from "./renderer-fbo";
 import { discoverAndAddFixedElements } from "./renderer-dynamic";
 import { discoverReveals, triggerRevealCaptures } from "./renderer-reveal";
 import { LENS_DOM_ATTR } from "./lens";
+import { injectSnapshotHideStyles } from "./utils";
 
 /**
  * The private WebGL canvas always matches the visual viewport so that the
@@ -204,10 +205,13 @@ export async function captureSnapshotImpl(
     if (style.position === "fixed") {
       return true;
     }
-    return !!(
-      el.hasAttribute("data-aqualens-ignore") ||
-      (typeof el.closest === "function" && el.closest("[data-aqualens-ignore]"))
-    );
+    // NOTE: `data-aqualens-ignore` is intentionally NOT excluded here —
+    // it's masked via the `SNAPSHOT_HIDE_RULE` style injected in
+    // `onclone` so siblings that depend on the marked element for layout
+    // (e.g. a navbar whose intrinsic width is established by a wrapped
+    // tab list, with an `absolute inset-1` reveal inside it) keep their
+    // dimensions in the clone.
+    return false;
   };
 
   const queueFullSnapshotCapture = (): void => {
@@ -307,6 +311,7 @@ export async function captureSnapshotImpl(
       scrollY: 0,
       scale,
       ignoreElements: ignoreElementsFunc,
+      onclone: injectSnapshotHideStyles,
     });
     uploadTexture(renderer, snapCanvas, region.x, region.y, fullSnapshot);
     return true;

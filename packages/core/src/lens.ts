@@ -268,6 +268,23 @@ export class AqualensLens implements AqualensLensInstance {
         // its previous (still-mostly-correct) dimensions until the
         // proper region has been applied AND the new pixels drawn.
         this.invalidateStyleMetrics();
+        // Also mark the cascade-mode DOM-content capture dirty: the lens
+        // changed size, which usually means its rendered child layout
+        // changed (a flex container shrinking when one of its children's
+        // width animates from `w-18` to `w-0`, a navbar collapsing
+        // tabs, …). Without this the cached html2canvas snapshot keeps
+        // its original aspect ratio and gets stretched into the new lens
+        // rect by `compositeLensContentToCompose`, baking a visibly
+        // distorted "ghost" of the old content into the compose FBO that
+        // higher stacking groups then sample through their own glass
+        // effect. The MutationObserver path in `_contentObserver` only
+        // catches childList / characterData changes, so pure CSS-class
+        // driven layout shifts (Tailwind responsive variants,
+        // `group-data-*` selectors) wouldn't trigger a recapture
+        // otherwise. Triggering the recapture is cheap (gated by
+        // `_contentCapturing` and `MAX_CONCURRENT_LENS_CONTENT_CAPTURE`)
+        // and only actually runs html2canvas when cascade is active.
+        this._contentCaptureDirty = true;
         this.renderer.requestRender();
       });
       this._sizeObs.observe(this.element);
