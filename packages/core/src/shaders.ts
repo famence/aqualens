@@ -287,6 +287,8 @@ void main() {
   if (mask <= 0.0) discard;
 
   vec2 baseRevealUV = (localCoord - u_revealRect.xy) / u_revealRect.zw;
+  float zoomScale = max(0.1, 1.0 + u_refZoom);
+  vec2 zoomedRevealUV = (baseRevealUV - vec2(0.5)) / zoomScale + vec2(0.5);
 
   // Refraction offset in "lens viewport fractions" — identical math to MAIN.
   vec2 offLens = vec2(0.0);
@@ -312,15 +314,15 @@ void main() {
 
   vec4 color;
   if (u_refDispersion <= 0.001 || revealOff == vec2(0.0)) {
-    color = sampleRevealClamped(baseRevealUV + revealOff);
+    color = sampleRevealClamped(zoomedRevealUV + revealOff);
   } else {
     // Chromatic dispersion: shift per-channel sample position, mirroring
     // MAIN's sampleDispersion but in reveal-rect UV space.
     vec4 sampR = sampleRevealClamped(
-      baseRevealUV + revealOff * (1.0 - (N_R - 1.0) * u_refDispersion));
-    vec4 sampG = sampleRevealClamped(baseRevealUV + revealOff);
+      zoomedRevealUV + revealOff * (1.0 - (N_R - 1.0) * u_refDispersion));
+    vec4 sampG = sampleRevealClamped(zoomedRevealUV + revealOff);
     vec4 sampB = sampleRevealClamped(
-      baseRevealUV + revealOff * (1.0 - (N_B - 1.0) * u_refDispersion));
+      zoomedRevealUV + revealOff * (1.0 - (N_B - 1.0) * u_refDispersion));
     // Alpha is taken from the central sample — the per-channel alphas are
     // all within a sub-pixel of each other, so mixing them would just add
     // noise at text edges.
@@ -630,10 +632,11 @@ void main() {
   vec2 localCoord = v_uv * u_resolution;
   float px = u_dpr / u_resolution.y;
 
-  vec2 baseUV = clampUVToBounds(getTexUV(v_uv));
-
   float sdf;
   Material mat = getBlendedMaterial(localCoord, sdf);
+  float zoomScale = max(0.1, 1.0 + mat.refZoom);
+  vec2 zoomedLensUV = (v_uv - vec2(0.5)) / zoomScale + vec2(0.5);
+  vec2 baseUV = clampUVToBounds(getTexUV(zoomedLensUV));
 
   vec4 outColor;
 
