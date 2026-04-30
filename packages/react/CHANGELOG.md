@@ -1,5 +1,16 @@
 # @aqualens/react
 
+## 3.0.0
+
+### Major Changes
+
+- [`e3d5c29`](https://github.com/famence/aqualens/commit/e3d5c299a293f4d4609986540ac3b8f5cbde545a) Thanks [@famence](https://github.com/famence)! - Significant rework on architecture
+
+### Patch Changes
+
+- Updated dependencies [[`e3d5c29`](https://github.com/famence/aqualens/commit/e3d5c299a293f4d4609986540ac3b8f5cbde545a)]:
+  - @aqualens/core@3.0.0
+
 ## 2.2.0
 
 ### Minor Changes
