@@ -422,6 +422,16 @@ export function compositeLensContentToCompose(
     const captureW = lens._contentCapture.width;
     const captureH = lens._contentCapture.height;
     if (captureW <= 0 || captureH <= 0) continue;
+    // html2canvas capture runs async. If the lens resized while a capture was
+    // in flight, we can temporarily hold a stale bitmap (old dimensions). If
+    // we stretched that bitmap into the current lens rect, overlapping lenses
+    // would refract visibly warped child content. Skip stale captures and wait
+    // for the recapture pass triggered by ResizeObserver / mutation observers.
+    if (captureW !== texW || captureH !== texH) {
+      lens._contentCaptureDirty = true;
+      renderer.requestRender();
+      continue;
+    }
 
     ensureLensContentTex(renderer, captureW, captureH);
 
