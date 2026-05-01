@@ -1,6 +1,6 @@
 {
   "name": "@aqualens/react",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "React bindings for @aqualens/core – A liquid glass effect components and hooks",
   "main": "dist/aqualens-react.js",
   "module": "dist/aqualens-react.mjs",
@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aqualens/core": "^3.0.0"
+    "@aqualens/core": "^3.0.1"
   },
   "peerDependencies": {
     "html2canvas-pro": "^2.0.2",

@@ -1,5 +1,14 @@
 # @aqualens/react
 
+## 3.0.1
+
+### Patch Changes
+
+- [`4fefaf6`](https://github.com/famence/aqualens/commit/4fefaf67798bf1542760ec59501728d4b7d154c7) Thanks [@famence](https://github.com/famence)! - Update readme
+
+- Updated dependencies [[`4fefaf6`](https://github.com/famence/aqualens/commit/4fefaf67798bf1542760ec59501728d4b7d154c7)]:
+  - @aqualens/core@3.0.1
+
 ## 3.0.0
 
 ### Major Changes
