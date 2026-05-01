@@ -1,6 +1,6 @@
 # @aqualens/core
 
-Framework-agnostic **liquid glass** effect for the web: WebGL2 refraction, glare, and backdrop capture. Used by [`@aqualens/react`](../react/README.md) and any vanilla or framework integration.
+Framework-agnostic **liquid glass** for the web: WebGL2 refraction, glare, and backdrop-driven blur. Pair with **[`@aqualens/react`](../react/README.md)** or use anywhere you control the DOM.
 
 **[Live demo](https://famence.github.io/aqualens/)**
 
@@ -8,8 +8,8 @@ Framework-agnostic **liquid glass** effect for the web: WebGL2 refraction, glare
 
 ## Requirements
 
-- **WebGL2** in the browser (current Chrome, Firefox, Safari, Edge).
-- **DOM**: runs in the browser; snapshot capture uses [`html2canvas-pro`](https://www.npmjs.com/package/html2canvas-pro), which you must install as a **peer dependency** (same major range as listed in `@aqualens/core`’s `peerDependencies`).
+- **WebGL2** in the browser
+- Runs in the **DOM** in the browser; install **[`html2canvas-pro`](https://www.npmjs.com/package/html2canvas-pro)** alongside this package (**peer dependency**; version range must match `@aqualens/core`).
 
 ## Install
 
@@ -19,7 +19,7 @@ npm install @aqualens/core html2canvas-pro
 
 ## Quick start (shared renderer)
 
-Most apps use one fullscreen (or region) backdrop and several glass elements. Use the **shared renderer** so every lens shares the same WebGL context and snapshot:
+Use the **shared renderer** when one backdrop and several glass elements should share one WebGL context and one snapshot:
 
 ```ts
 import {
@@ -29,19 +29,16 @@ import {
   type AqualensConfig,
 } from "@aqualens/core";
 
-// 1. Resolve once (defaults: document.body, resolution 2)
 const renderer = await getSharedRenderer(
   document.getElementById("backdrop"),
   2,
 );
 
-// 2. Optional: when the snapshot root or resolution changes later
 await updateSharedRendererConfig(
   document.getElementById("backdrop"),
   2,
 );
 
-// 3. Build full config (merge with defaults; tint is filled from the element’s CSS background)
 const config: AqualensConfig = {
   ...DEFAULT_OPTIONS,
   resolution: 2,
@@ -57,18 +54,18 @@ const config: AqualensConfig = {
 };
 
 const el = document.getElementById("glass")!;
-const lens = renderer.addLens(el, config);
+renderer.addLens(el, config);
 
-// 4. Shared helper already started the render loop after first getSharedRenderer().
-// Re-capture the backdrop after large layout/content changes:
 await renderer.captureSnapshot();
 ```
 
-**Stacked glass (macOS-style overlap):** if lenses use different `z-index` values and upper panes should “cut through” lower ones against the original snapshot, call `setOpaqueOverlap(true)` (see API below).
+The shared helper starts the render loop after the first successful `getSharedRenderer()`. Call **`captureSnapshot()`** when backdrop content or layout changes.
+
+For overlapping lenses with different stacking, call **`setOpaqueOverlap(true)`** so upper lenses sample the original snapshot where they cover lower ones (`setOpaqueOverlap` is exported next to `getSharedRenderer`).
 
 ## Quick start (own `AqualensRenderer`)
 
-For a second scene or full control over lifecycle, instantiate the renderer directly:
+Use the class directly when you need a **separate** scene or full lifecycle control (start/stop/destroy):
 
 ```ts
 import { AqualensRenderer, DEFAULT_OPTIONS, type AqualensConfig } from "@aqualens/core";
@@ -81,29 +78,27 @@ const config: AqualensConfig = { ...DEFAULT_OPTIONS /* … */ };
 renderer.addLens(glassElement, config);
 ```
 
-Remember to call `renderer.destroy()` when tearing down.
+Call **`renderer.destroy()`** when tearing down.
 
 ## Dynamic content
 
-Elements that update frequently (e.g. animated children) can be registered so the engine can update the snapshot path:
+Register nodes that animate or update often so snapshots can stay correct:
 
 ```ts
 renderer.addDynamicElement(movingNode);
-// or multiple / selector string overloads
+// Multiple nodes or selector overloads are also supported.
 ```
 
 ## Reveal overlays (`data-aqualens-reveal-*`)
 
-The renderer supports a reveal layer API for "Apple Music style" tab indicators and similar UI, where alternate content is shown only when a lens with a high-enough stacking index is present.
+Alternate content inside a lens (for example accent labels on tabs) can be gated by **reveal index** and **mode**:
 
-- `data-aqualens-reveal-index="{number}"` — required; threshold value used by the renderer to decide whether the reveal is eligible for a lens/group.
-- `data-aqualens-reveal-mode="under-lens" | "on-lens"` — optional; default is `under-lens`.
+- `data-aqualens-reveal-index="{number}"` — required threshold for eligibility.
+- `data-aqualens-reveal-mode="under-lens" | "on-lens"` — optional; default **`under-lens`**.
 
 ```html
-<!-- Base label (normal content) -->
 <div class="tab-label">Genres</div>
 
-<!-- Reveal label (alternate colored content) -->
 <div
   data-aqualens-reveal-index="11"
   data-aqualens-reveal-mode="on-lens"
@@ -113,42 +108,37 @@ The renderer supports a reveal layer API for "Apple Music style" tab indicators 
 </div>
 ```
 
-Mode behavior:
+- **`under-lens`** — reveal is folded into the source before the glass pass (below the lens tint).
+- **`on-lens`** — reveal is drawn after the glass pass, clipped to the lens shape (above tint, still respects that lens refraction settings).
 
-- `under-lens`: reveal content is composited into the source texture before the glass render pass, so it appears below the lens tint.
-- `on-lens`: reveal content is drawn after the lens render pass, clipped by the lens SDF, so it appears above the dark tint while still living inside the lens silhouette.
-- `on-lens` keeps refraction enabled: displacement and chromatic dispersion are driven by the owning lens's `refraction.thickness`, `refraction.factor`, and `refraction.dispersion`.
+## Power-save renderer
 
-Migration note:
-
-- Rename legacy `data-liquid-reveal` to `data-aqualens-reveal-index`.
-
-## Power-save mode (lighter GPU path)
-
-For a CSS/SVG-style fallback with reduced GPU work, the package exposes `PowerSaveRenderer`, `PowerSaveLens`, and `getSharedPowerSaveRenderer()`. Wire them the same way as your UI strategy (see the React package’s `powerSave` prop for reference).
+For a lighter rendering path without the full WebGL pipeline, use **`PowerSaveRenderer`**, **`PowerSaveLens`**, and **`getSharedPowerSaveRenderer()`** with the same lens/DOM wiring you use elsewhere. In React, set the **`powerSave`** prop on `<Aqualens>`.
 
 ## Main exports
 
 | Export | Role |
 |--------|------|
-| `getSharedRenderer`, `updateSharedRendererConfig`, `setOpaqueOverlap` | Single shared WebGL renderer for the page |
+| `getSharedRenderer`, `updateSharedRendererConfig`, `setOpaqueOverlap` | Shared WebGL renderer for the page |
 | `getSharedPowerSaveRenderer` | Shared power-save renderer |
 | `AqualensRenderer` | Dedicated WebGL renderer instance |
-| `AqualensLens` | Lens instance type (usually created via `addLens`) |
+| `AqualensLens` | Lens type (typically from `addLens`) |
 | `PowerSaveRenderer`, `PowerSaveLens` | Power-save implementations |
-| `DEFAULT_OPTIONS`, `DEFAULT_TINT` | Default `AqualensConfig` and tint fallback |
+| `DEFAULT_OPTIONS`, `DEFAULT_TINT` | Defaults for `AqualensConfig` and tint |
 | Types: `AqualensConfig`, `AqualensOptions`, `AqualensLensOptions`, `RefractionOptions`, `GlareOptions`, … | TypeScript definitions |
 
 ## Styling notes
 
-- The lens reads **`border-radius`** and **`background-color`** from the target element; the latter drives glass **tint** (then the real background is made transparent for the WebGL pass).
-- **`box-shadow`** on the element is parsed for rendering; the DOM shadow is suppressed while the lens is active.
+- **`border-radius`** and **`background-color`** on the target element define shape and glass **tint** (the DOM background is cleared for the lens pass).
+- **`box-shadow`** on the element is used for rendering; the live DOM shadow is hidden while the lens is active.
 
-## Scripts (monorepo / package root)
+## Scripts
+
+From the **`packages/core`** workspace (or the monorepo root with `--workspace=`):
 
 ```bash
-npm run build   # NODE_ENV=production tsup → minified dist/ (no source maps)
-npm run dev     # watch build without minification (faster iteration)
+npm run build
+npm run dev
 npm run typecheck
 ```
 
