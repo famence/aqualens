@@ -5,12 +5,6 @@ on:
     branches:
       - main
 
-# Opt JavaScript actions (e.g. configure-pages, deploy-pages, upload-artifact) into
-# Node.js 24 until upstream releases declare node24. See:
-# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   publish:
     name: Version & Publish
@@ -29,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20"
           cache: npm
 
       - name: Install dependencies
@@ -80,7 +74,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "20"
           cache: npm
           cache-dependency-path: |
             package-lock.json

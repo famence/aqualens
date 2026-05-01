@@ -27,7 +27,7 @@ demo/      # Next.js showcase app
 
 ## Requirements
 
-- Node.js 24+
+- Node.js 18+ for workspace packages (`@aqualens/core`, `@aqualens/react`); the Next.js demo in `demo/` requires Node.js 20.9+ (Next.js engine range).
 - npm 9+
 
 ## Installation
