@@ -30,3 +30,13 @@ Rules and conventions for AI agents and contributors working in this repository.
 2. Run `npm run build` to verify the build succeeds.
 3. Ensure all new comments and commit messages are in English.
 4. Ensure demo app content is in English.
+
+## Cursor Cloud specific instructions
+
+- **Node.js** — The project requires Node.js >= 20.9 (needed by the demo app's Next.js 16 dependency). The update script installs Node 22 via nvm.
+- **Two-phase install** — The demo app (`demo/`) is **not** part of the npm workspaces. After `npm install` at the repo root, run `npm install` separately inside `demo/`.
+- **Build order** — Core must build before React. Use `npm run build` at the repo root (it handles ordering). The demo app links to local packages via `file:` references and requires the library packages to be built first.
+- **Typecheck** — Run from root: `npm run typecheck`. This validates both `packages/core` and `packages/react`.
+- **Lint** — The demo app has no ESLint config; `npm run lint` inside `demo/` will fail. This is expected. Linting is not configured for the library packages either.
+- **Demo dev server** — `cd demo && npm run dev` starts Next.js 16 with Turbopack on `http://localhost:3000`. The glass effects require a WebGL2-capable browser; in headless environments effects won't render visually but the server still responds.
+- **No tests** — There is no test framework configured in this repository (no jest, vitest, or test scripts). Verify changes via `npm run typecheck` and `npm run build`.
