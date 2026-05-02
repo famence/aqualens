@@ -354,8 +354,29 @@ function rasteriseSingleShape(
       );
       const displacement = profile[sampleIndex] ?? 0;
       const norm = displacement * invMaxDisp;
-      const dX = -gradX * norm * opacity;
-      const dY = -gradY * norm * opacity;
+      // The refraction profile is computed from outside-to-inside along
+      // the bezel (see `calculateDisplacementProfile`), so the encoded
+      // displacement vector points **outward** along the surface normal.
+      // `feDisplacementMap` reads `R`/`G` at the current pixel and then
+      // samples `in` at `(x + scale*(R-128)/255, y + scale*(G-128)/255)`,
+      // i.e. positive R shifts the SAMPLE rightward and therefore the
+      // OUTPUT pixel shows whatever sits to the right of it in the
+      // backdrop. To make the lens pull refracted content from *outside*
+      // the silhouette inward — the physically correct direction for a
+      // convex glass bezel — the sample offset must point along the
+      // outward gradient (same direction as `gradX`, `gradY`), not the
+      // opposite of it. The earlier `-gradX * norm` / `-gradY * norm`
+      // orientation sampled from *inside* the lens instead, which made
+      // the bezel compress the lens's own interior content into the rim
+      // rather than compressing the surrounding background, and produced
+      // the visible asymmetry where the top-edge refraction appeared to
+      // shift the backdrop leftward while the bottom-edge refraction
+      // shifted it rightward (same story for left/right corner radii).
+      // The centre of each straight edge still encodes a zero lateral
+      // displacement because one of `gradX` / `gradY` is exactly zero on
+      // the axis-aligned portions of the bezel.
+      const dX = gradX * norm * opacity;
+      const dY = gradY * norm * opacity;
       data[offset] = clamp255(128 + dX * 127);
       data[offset + 1] = clamp255(128 + dY * 127);
 
