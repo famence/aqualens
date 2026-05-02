@@ -211,9 +211,11 @@ export function buildCombinedLensImageData(
  *   - `distFromCenter = sqrt(x² + y²)` is the radial distance from
  *     the arc centre. The pixel is in the bezel band iff
  *     `distFromCenter ∈ [r - bezel, r + 1]`.
- *   - The outward surface normal is just `(x / distFromCenter,
- *     y / distFromCenter)` — radial in the corner arcs, axis-aligned
- *     on the straight edges.
+ *   - The outward surface normal matches the WebGL path's
+ *     `sdRoundBoxPerCorner` gradient: `q = abs(p) - halfSize + radius`
+ *     (per-quadrant radius), `qc = max(q, 0)`, then `qc / |qc|`
+ *     times `sign(p)`. On straight top/bottom edges this is purely
+ *     vertical (no spurious horizontal shear from a corner arc centre).
  *
  * This trades 5× SDF evaluations + a finite-difference gradient (the
  * old per-pixel cost) for ~25 ops per pixel. In the dominant
@@ -273,8 +275,8 @@ function rasteriseSingleShape(
     for (let px = minX; px < maxX; px++) {
       const isLeft = px < cx;
 
-      // Pick the relevant corner radius and arc centre. Arc centre
-      // sits inset by `r` from the bbox corner along both axes.
+      // Pick the relevant corner radius and arc centre (annulus band
+      // membership + distance-to-edge for profile sampling).
       let r: number;
       let ccx: number;
       let ccy: number;
@@ -300,11 +302,6 @@ function rasteriseSingleShape(
         }
       }
 
-      // Offset from the arc centre, clamped to the "outward" axis
-      // direction. Pixels on the straight portion of an edge get one
-      // coordinate clamped to 0, which makes the radial direction
-      // collapse to an axis-aligned outward normal — exactly what we
-      // want for straight-edge bezels.
       const dxRaw = px - ccx;
       const dyRaw = py - ccy;
       const x = isLeft ? Math.min(0, dxRaw) : Math.max(0, dxRaw);
@@ -326,17 +323,42 @@ function rasteriseSingleShape(
       // 1-px AA band on the outside of the silhouette.
       const opacity = signedDist > 0 ? Math.max(0, 1 - signedDist) : 1;
 
-      // Outward surface normal. In the corner arc this is radial; on
-      // straight edges one component is 0.
+      // Outward normal: same construction as `getNormal` in shaders.ts
+      // (sdRoundBoxPerCorner). SVG y grows downward, so the vertical
+      // half split uses pyLocal < 0 for the top half (maps to p.y > 0
+      // in the shader's bottom-left origin).
+      const halfW = sw * 0.5;
+      const halfH = sh * 0.5;
+      const pxLocal = px - cx;
+      const pyLocal = py - cy;
+      const maxAllowed = Math.min(halfW, halfH);
+      const rTl = Math.min(tl, maxAllowed);
+      const rTr = Math.min(tr, maxAllowed);
+      const rBr = Math.min(br, maxAllowed);
+      const rBl = Math.min(bl, maxAllowed);
+      const rVert0 = pxLocal > 0 ? rTr : rTl;
+      const rVert1 = pxLocal > 0 ? rBr : rBl;
+      const radiusPick = pyLocal < 0 ? rVert0 : rVert1;
+      const qx = Math.abs(pxLocal) - halfW + radiusPick;
+      const qy = Math.abs(pyLocal) - halfH + radiusPick;
+      const qcx = Math.max(qx, 0);
+      const qcy = Math.max(qy, 0);
+      const lenQ = Math.hypot(qcx, qcy);
       let gradX: number;
       let gradY: number;
-      if (dist > 1e-6) {
-        const inv = 1 / dist;
-        gradX = x * inv;
-        gradY = y * inv;
+      if (lenQ > 1e-4) {
+        const inv = 1 / lenQ;
+        const sxn = pxLocal === 0 ? 0 : pxLocal > 0 ? 1 : -1;
+        const syn = pyLocal === 0 ? 0 : pyLocal > 0 ? 1 : -1;
+        gradX = qcx * inv * sxn;
+        gradY = qcy * inv * syn;
       } else {
-        // At the arc centre exactly — no meaningful direction.
-        continue;
+        const tieX = qx > qy ? 1 : 0;
+        const tieY = qx > qy ? 0 : 1;
+        const sxn = pxLocal === 0 ? 0 : pxLocal > 0 ? 1 : -1;
+        const syn = pyLocal === 0 ? 0 : pyLocal > 0 ? 1 : -1;
+        gradX = tieX * sxn;
+        gradY = tieY * syn;
       }
 
       const offset = (rowOffsetBase + px) * 4;
