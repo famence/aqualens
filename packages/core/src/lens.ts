@@ -2,6 +2,7 @@ import { parseBgColorToRgba, parseBoxShadow, type ShadowParams } from "./utils";
 import type { AqualensRenderer } from "./renderer";
 import {
   DEFAULT_TINT,
+  lensStackingZIndex,
   type AqualensConfig,
   type DOMRectLike,
   type AqualensLensInstance,
@@ -62,8 +63,8 @@ export class AqualensLens implements AqualensLensInstance {
    * aligned with the underlying content with no JS intervention.
    *
    * Stacking semantics (so lens DOM children still paint above the glass
-   * effect): each host gets `z-index = stackingIndex * 2` and the lens
-   * DOM element gets `stackingIndex * 2 + 1` (via `_syncStackingZIndex`),
+   * effect): each host gets {@link hostStackingZIndex} and the lens DOM
+   * element gets {@link lensStackingZIndex} (via `_syncStackingZIndex`),
    * so the lens always paints above its glass canvas in the same
    * stacking context. For implicit (no stackingIndex) lenses both the
    * host and the lens stay at default z-index, so they participate in
@@ -787,9 +788,10 @@ export class AqualensLens implements AqualensLensInstance {
         this._savedZIndexInline = this.element.style.zIndex;
         this._stackingZApplied = true;
       }
-      // Host uses `si * 2`, lens DOM uses `si * 2 + 1` so lens content
-      // always paints above glass canvas for the same stacking group.
-      const desired = String(si * 2 + 1);
+      // Host uses `hostStackingZIndex(si)`, lens DOM uses
+      // `lensStackingZIndex(si)` so lens content always paints above glass
+      // canvas for the same stacking group.
+      const desired = String(lensStackingZIndex(si));
       if (this._appliedZIndex !== desired) {
         this.element.style.zIndex = desired;
         this._appliedZIndex = desired;

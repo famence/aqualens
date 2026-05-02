@@ -14,17 +14,23 @@ import {
   updateSharedRendererConfig,
   setOpaqueOverlap,
   getSharedPowerSaveRenderer,
+  getSharedSvgRenderer,
+  setSvgOpaqueOverlap,
+  supportsSvgBackdropFilter,
   DEFAULT_OPTIONS,
   LENS_DOM_ATTR,
   type AqualensRenderer,
   type AqualensLensInstance,
   type AqualensConfig,
   type PowerSaveRenderer,
+  type SvgRenderer,
   type RefractionOptions,
   type GlareOptions,
   type SnapshotSourceElement,
   type SnapshotSourceTexture,
   type SnapshotSourceTextureSize,
+  type RenderMode,
+  type SurfaceShape,
 } from "@aqualens/core";
 
 interface AqualensOwnProps {
@@ -52,20 +58,52 @@ interface AqualensOwnProps {
 
   /**
    * Explicit stacking index that controls lens merge grouping and overlay priority.
-   * Lenses with the same stackingIndex merge together; higher values render on top.
-   * When omitted, the lens is rendered individually (no merging) in natural DOM order
-   * and always below any lens that has an explicit stackingIndex.
+   * Lenses with the same stackingIndex merge together in `webgl` mode; higher
+   * values render on top. When omitted, the lens is rendered individually in
+   * natural DOM order and always below any lens that has an explicit
+   * stackingIndex.
+   *
+   * Note: the `svg` backend never merges sibling lenses into a shared blob —
+   * use `mode="webgl"` if you need true multi-lens merging.
    */
   stackingIndex?: number;
 
   /**
    * When true, lenses at different stackingIndex values clip lower ones and sample
-   * the original snapshot (macOS-style). Applies to the shared WebGL renderer only.
+   * the original snapshot (macOS-style). Supported by both `webgl` and `svg`
+   * backends. Ignored by `css`.
    * @default false
    */
   opaqueOverlap?: boolean;
 
-  /** CSS/SVG fallback without WebGL for reduced GPU load. */
+  /**
+   * Rendering backend. Defaults to `auto`, which picks `svg` on Chromium-based
+   * browsers (cheap GPU compositing via SVG-as-`backdrop-filter`) and `webgl`
+   * everywhere else. Use `css` for the lightest-weight fallback. Supersedes
+   * the legacy `powerSave` boolean (`powerSave: true` is treated as
+   * `mode: "css"`).
+   * @default "auto"
+   */
+  mode?: RenderMode;
+
+  /**
+   * Bezel surface profile used by the SVG backend. Apple's Liquid Glass
+   * mostly uses `convex-squircle`. Ignored by other modes.
+   * @default "convex-squircle"
+   */
+  surfaceShape?: SurfaceShape;
+
+  /**
+   * Refractive index passed to Snell's law in the SVG backend. Ignored by
+   * other modes. Default of 1.5 matches plain glass and the kube.io article.
+   * @default 1.5
+   */
+  refractiveIndex?: number;
+
+  /**
+   * @deprecated Use `mode="css"` instead. Kept for backward compatibility:
+   * `powerSave: true` is treated as `mode: "css"`.
+   */
   powerSave?: boolean;
 
   /** Called once after the lens is initialized. */
@@ -131,6 +169,8 @@ function buildConfig(options: {
   blurRadius?: number;
   blurEdge?: boolean;
   stackingIndex?: number;
+  surfaceShape?: SurfaceShape;
+  refractiveIndex?: number;
   onInit?: (lens: AqualensLensInstance) => void;
 }): AqualensConfig {
   return {
@@ -141,8 +181,33 @@ function buildConfig(options: {
     blurRadius: options.blurRadius ?? DEFAULT_OPTIONS.blurRadius,
     blurEdge: options.blurEdge ?? DEFAULT_OPTIONS.blurEdge,
     stackingIndex: options.stackingIndex,
+    surfaceShape: options.surfaceShape ?? DEFAULT_OPTIONS.surfaceShape,
+    refractiveIndex: options.refractiveIndex ?? DEFAULT_OPTIONS.refractiveIndex,
     on: options.onInit ? { init: options.onInit } : {},
   };
+}
+
+/**
+ * Resolve the effective rendering backend.
+ *
+ * Precedence (highest first):
+ *   1. Legacy `powerSave: true` → forces `css` (deprecated path).
+ *   2. Explicit `mode` from props.
+ *   3. `auto`: `svg` on Chromium browsers, `webgl` elsewhere.
+ */
+type ResolvedBackend = "webgl" | "svg" | "css";
+
+function resolveBackend(
+  mode: RenderMode | undefined,
+  powerSave: boolean | undefined,
+): ResolvedBackend {
+  if (powerSave) return "css";
+  const requested = mode ?? "auto";
+  if (requested === "webgl" || requested === "svg" || requested === "css") {
+    if (requested === "svg" && !supportsSvgBackdropFilter()) return "webgl";
+    return requested;
+  }
+  return supportsSvgBackdropFilter() ? "svg" : "webgl";
 }
 
 const AqualensInner = <C extends React.ElementType = "div">(
@@ -159,6 +224,9 @@ const AqualensInner = <C extends React.ElementType = "div">(
     blurEdge,
     stackingIndex,
     opaqueOverlap,
+    mode,
+    surfaceShape,
+    refractiveIndex,
     powerSave,
     onInit,
     lensRef: externalLensRef,
@@ -173,9 +241,20 @@ const AqualensInner = <C extends React.ElementType = "div">(
   const stableGlare = useShallowMemo(glare);
   const stableSourceTextureSize = useShallowMemo(sourceTextureSize);
 
-  const [renderer, setRenderer] = useState<AqualensRenderer | null>(null);
-  const rendererRef = useRef<AqualensRenderer | null>(null);
+  // Resolved backend is sticky for the lifetime of the component to
+  // avoid mid-flight swap thrash (which would require recreating the
+  // lens instance). Re-run resolution when explicit user inputs change.
+  const backend = useMemo<ResolvedBackend>(
+    () => resolveBackend(mode, powerSave),
+    [mode, powerSave],
+  );
+
+  const [webglRenderer, setWebglRenderer] = useState<AqualensRenderer | null>(
+    null,
+  );
+  const webglRendererRef = useRef<AqualensRenderer | null>(null);
   const powerSaveRendererRef = useRef<PowerSaveRenderer | null>(null);
+  const svgRendererRef = useRef<SvgRenderer | null>(null);
   const elementRef = useRef<HTMLElement | null>(null);
   const lensInstanceRef = useRef<AqualensLensInstance | null>(null);
   const externalLensRefRef = useRef<typeof externalLensRef>(externalLensRef);
@@ -206,16 +285,16 @@ const AqualensInner = <C extends React.ElementType = "div">(
 
   useEffect(
     () => () => {
-      rendererRef.current = null;
-      setRenderer(null);
+      webglRendererRef.current = null;
+      setWebglRenderer(null);
     },
     [],
   );
 
   useEffect(() => {
-    if (powerSave) {
-      rendererRef.current = null;
-      setRenderer(null);
+    if (backend !== "webgl") {
+      webglRendererRef.current = null;
+      setWebglRenderer(null);
       return;
     }
 
@@ -223,7 +302,7 @@ const AqualensInner = <C extends React.ElementType = "div">(
     const target = snapshotTarget ?? undefined;
     const resolutionValue = resolution ?? undefined;
 
-    if (rendererRef.current) {
+    if (webglRendererRef.current) {
       updateSharedRendererConfig(
         snapshotTarget ?? null,
         resolution,
@@ -240,29 +319,33 @@ const AqualensInner = <C extends React.ElementType = "div">(
       sourceElement,
       sourceTexture,
       stableSourceTextureSize,
-    ).then(
-      (rendererInstance: AqualensRenderer) => {
-        if (cancelled) return;
-        rendererRef.current = rendererInstance;
-        setRenderer(rendererInstance);
-      },
-    );
+    ).then((rendererInstance: AqualensRenderer) => {
+      if (cancelled) return;
+      webglRendererRef.current = rendererInstance;
+      setWebglRenderer(rendererInstance);
+    });
     return () => {
       cancelled = true;
     };
   }, [
+    backend,
     snapshotTarget,
     resolution,
     sourceElement,
     sourceTexture,
     stableSourceTextureSize,
-    powerSave,
   ]);
 
   useEffect(() => {
-    if (powerSave || !renderer) return;
-    setOpaqueOverlap(!!opaqueOverlap);
-  }, [opaqueOverlap, powerSave, renderer]);
+    if (backend === "webgl") {
+      if (webglRenderer) setOpaqueOverlap(!!opaqueOverlap);
+      return;
+    }
+    if (backend === "svg") {
+      setSvgOpaqueOverlap(!!opaqueOverlap);
+      return;
+    }
+  }, [opaqueOverlap, backend, webglRenderer]);
 
   useEffect(() => {
     if (!elementRef.current) return;
@@ -274,10 +357,12 @@ const AqualensInner = <C extends React.ElementType = "div">(
       blurRadius,
       blurEdge,
       stackingIndex,
+      surfaceShape,
+      refractiveIndex,
       onInit,
     });
 
-    if (powerSave) {
+    if (backend === "css") {
       const powerSaveRenderer = getSharedPowerSaveRenderer();
       powerSaveRendererRef.current = powerSaveRenderer;
       const lens = powerSaveRenderer.addLens(elementRef.current, config);
@@ -289,9 +374,22 @@ const AqualensInner = <C extends React.ElementType = "div">(
       };
     }
 
-    if (!renderer) return;
+    if (backend === "svg") {
+      const svgRenderer = getSharedSvgRenderer();
+      svgRendererRef.current = svgRenderer;
+      svgRenderer.opaqueOverlap = !!opaqueOverlap;
+      const lens = svgRenderer.addLens(elementRef.current, config);
+      setLensInstance(lens);
+      return () => {
+        lens.destroy();
+        setLensInstance(null);
+        svgRendererRef.current = null;
+      };
+    }
 
-    const lens = renderer.addLens(elementRef.current, config);
+    if (!webglRenderer) return;
+
+    const lens = webglRenderer.addLens(elementRef.current, config);
     setLensInstance(lens);
 
     return () => {
@@ -299,7 +397,7 @@ const AqualensInner = <C extends React.ElementType = "div">(
       setLensInstance(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderer, powerSave]);
+  }, [webglRenderer, backend]);
 
   useEffect(() => {
     const lens = lensInstanceRef.current;
@@ -312,16 +410,16 @@ const AqualensInner = <C extends React.ElementType = "div">(
       blurRadius,
       blurEdge,
       stackingIndex,
+      surfaceShape,
+      refractiveIndex,
       onInit: lens.options.on?.init,
     });
     Object.assign(lens.options, next);
     lens.options.tint = preservedTint;
 
-    if (powerSave) {
-      powerSaveRendererRef.current?.requestRender();
-    } else {
-      renderer?.requestRender();
-    }
+    if (backend === "css") powerSaveRendererRef.current?.requestRender();
+    else if (backend === "svg") svgRendererRef.current?.requestRender();
+    else webglRenderer?.requestRender();
   }, [
     resolution,
     stableRefraction,
@@ -329,8 +427,10 @@ const AqualensInner = <C extends React.ElementType = "div">(
     blurRadius,
     blurEdge,
     stackingIndex,
-    renderer,
-    powerSave,
+    surfaceShape,
+    refractiveIndex,
+    webglRenderer,
+    backend,
   ]);
 
   const mergedStyle = useMemo<CSSProperties>(

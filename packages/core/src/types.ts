@@ -10,6 +10,56 @@ export interface TintColor {
 export const DEFAULT_TINT: TintColor = { r: 255, g: 255, b: 255, a: 0 };
 
 /**
+ * Base added to every `z-index` derived from `stackingIndex` so lenses sit
+ * above common layout utilities (`z-10`, sticky headers, etc.). If page
+ * content stacks above the lens element, `backdrop-filter` (SVG mode) never
+ * samples those pixels, so they stay sharp while the background refracts.
+ */
+export const STACKING_Z_INDEX_BASE = 100;
+
+/** CSS `z-index` for the lens DOM when `stackingIndex` is set. */
+export function lensStackingZIndex(stackingIndex: number): number {
+  return STACKING_Z_INDEX_BASE + stackingIndex * 2 + 1;
+}
+
+/** CSS `z-index` for the WebGL canvas host (one layer below the lens DOM). */
+export function hostStackingZIndex(stackingIndex: number): number {
+  return STACKING_Z_INDEX_BASE + stackingIndex * 2;
+}
+
+/** CSS `z-index` for SVG merge-group overlays (same band as the canvas host). */
+export function mergeOverlayStackingZIndex(stackingIndex: number): number {
+  return STACKING_Z_INDEX_BASE + stackingIndex * 2;
+}
+
+/**
+ * How the liquid-glass effect is rendered.
+ *
+ *  - `auto`  — pick the best backend at runtime: `svg` on Chromium-based
+ *    browsers (cheap, GPU-composited), `webgl` everywhere else.
+ *  - `webgl` — original WebGL2 backend with html2canvas snapshot.
+ *  - `svg`   — SVG `<feDisplacementMap>` applied as `backdrop-filter`,
+ *    based on the kube.io approach. Chromium-only; falls back to
+ *    `webgl` automatically if unsupported.
+ *  - `css`   — CSS-only fallback (formerly known as `powerSave`). Cheap,
+ *    works everywhere, looks the least like real glass.
+ *
+ * @default "auto"
+ */
+export type RenderMode = "auto" | "webgl" | "svg" | "css";
+
+/**
+ * Glass surface profile shape for the SVG renderer's bezel refraction.
+ * Apple's Liquid Glass mostly uses `convex-squircle`; the others are
+ * provided for parity with the kube.io article and creative use cases.
+ */
+export type SurfaceShape =
+  | "convex-circle"
+  | "convex-squircle"
+  | "concave"
+  | "lip";
+
+/**
  * Refraction (distortion) parameters for the liquid glass lens.
  * All fields are optional; unspecified values fall back to defaults.
  */
@@ -99,11 +149,27 @@ export interface AqualensOptions {
   blurEdge?: boolean;
   /**
    * Explicit stacking index that controls lens merge grouping and overlay priority.
-   * Lenses with the same stackingIndex merge together; higher values render on top.
-   * When omitted, the lens is rendered individually (no merging) in natural DOM order
-   * and always below any lens that has an explicit stackingIndex.
+   * Lenses with the same stackingIndex merge together (in `webgl` mode) or just
+   * stack in z-order (in `svg` mode); higher values render on top.
+   * When omitted, the lens is rendered individually (no merging) in natural DOM
+   * order and always below any lens that has an explicit stackingIndex.
+   *
+   * Note: the `svg` backend never merges sibling lenses into a shared blob —
+   * use `mode="webgl"` if you need true multi-lens merging.
    */
   stackingIndex?: number;
+  /**
+   * Bezel surface profile used by the SVG renderer. Ignored by other modes.
+   * @default "convex-squircle"
+   */
+  surfaceShape?: SurfaceShape;
+  /**
+   * Refractive index of the glass for the SVG renderer (Snell's law).
+   * Ignored by other modes. Set to 1 for no refraction; default of 1.5 is
+   * the value used by Apple's Liquid Glass and the kube.io article.
+   * @default 1.5
+   */
+  refractiveIndex?: number;
   /** Lifecycle callbacks. */
   on?: {
     /** Called once after the lens is initialized and ready to render. */
@@ -133,6 +199,10 @@ export interface AqualensConfig {
    * When undefined, the lens is rendered individually in natural order, below explicit lenses.
    */
   stackingIndex?: number;
+  /** Bezel surface profile used by the SVG renderer. */
+  surfaceShape: SurfaceShape;
+  /** Refractive index for the SVG renderer (Snell's law). */
+  refractiveIndex: number;
   /** Filled by the lens from computed `background-color` before the backdrop runs. */
   tint: TintColor;
   on: AqualensOptions["on"];
@@ -207,6 +277,8 @@ export const DEFAULT_OPTIONS: AqualensConfig = {
   },
   blurRadius: 4,
   blurEdge: true,
+  surfaceShape: "convex-squircle",
+  refractiveIndex: 1.5,
   tint: DEFAULT_TINT,
   on: {},
 };

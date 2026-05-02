@@ -16,6 +16,8 @@ export type {
   GlareOptions,
   DOMRectLike,
   TintColor,
+  RenderMode,
+  SurfaceShape,
 } from "@aqualens/core";
 
 export {
@@ -23,9 +25,14 @@ export {
   AqualensLens,
   PowerSaveRenderer,
   PowerSaveLens,
+  SvgRenderer,
+  SvgLens,
   getSharedRenderer,
   updateSharedRendererConfig,
   setOpaqueOverlap,
   getSharedPowerSaveRenderer,
+  getSharedSvgRenderer,
+  setSvgOpaqueOverlap,
+  supportsSvgBackdropFilter,
   DEFAULT_OPTIONS,
 } from "@aqualens/core";

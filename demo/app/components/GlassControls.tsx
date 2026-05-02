@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Aqualens } from "@aqualens/react";
+import { Aqualens, type RenderMode, type SurfaceShape } from "@aqualens/react";
 
 export interface GlassSettings {
   refraction: {
@@ -26,6 +26,8 @@ export interface GlassSettings {
   size: number;
   tintHex: string;
   tintAlpha: number;
+  surfaceShape: SurfaceShape;
+  refractiveIndex: number;
 }
 
 export const DEFAULT_GLASS_SETTINGS: GlassSettings = {
@@ -51,7 +53,23 @@ export const DEFAULT_GLASS_SETTINGS: GlassSettings = {
   size: 208,
   tintHex: "#ff00ff",
   tintAlpha: 0,
+  surfaceShape: "convex-squircle",
+  refractiveIndex: 1.5,
 };
+
+const RENDER_MODE_OPTIONS: { value: RenderMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "svg", label: "SVG" },
+  { value: "webgl", label: "WebGL" },
+  { value: "css", label: "CSS" },
+];
+
+const SURFACE_SHAPE_OPTIONS: { value: SurfaceShape; label: string }[] = [
+  { value: "convex-squircle", label: "Convex Squircle" },
+  { value: "convex-circle", label: "Convex Circle" },
+  { value: "concave", label: "Concave" },
+  { value: "lip", label: "Lip" },
+];
 
 const PANEL_REFRACTION = {
   thickness: 12,
@@ -148,6 +166,41 @@ function ColorField({
   );
 }
 
+function Select<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between py-0.5 gap-2">
+      <span className="text-[11px] text-white/50 uppercase tracking-wider font-medium">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        className="bg-white/8 hover:bg-white/12 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white/85 cursor-pointer appearance-none transition-colors min-w-[110px]"
+      >
+        {options.map((option) => (
+          <option
+            key={option.value}
+            value={option.value}
+            className="bg-black text-white"
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function GlassSwitch({
   label,
   value,
@@ -230,8 +283,8 @@ function Section({
 export function GlassControls({
   settings,
   onChange,
-  powerSave,
-  onPowerSaveChange,
+  mode,
+  onModeChange,
   mergeLens,
   onMergeLensChange,
   opaqueOverlap,
@@ -239,8 +292,8 @@ export function GlassControls({
 }: {
   settings: GlassSettings;
   onChange: (s: GlassSettings) => void;
-  powerSave: boolean;
-  onPowerSaveChange: (v: boolean) => void;
+  mode: RenderMode;
+  onModeChange: (v: RenderMode) => void;
   mergeLens: boolean;
   onMergeLensChange: (v: boolean) => void;
   opaqueOverlap: boolean;
@@ -269,7 +322,7 @@ export function GlassControls({
     <div className="fixed right-4 top-4 z-100 hidden md:flex flex-col items-end gap-2 select-none">
       <Aqualens
         className="rounded-full shadow-lg bg-black/80"
-        powerSave={powerSave}
+        mode={mode}
         opaqueOverlap={opaqueOverlap}
         refraction={PANEL_REFRACTION}
         glare={PANEL_GLARE}
@@ -307,7 +360,7 @@ export function GlassControls({
       {!collapsed && (
         <Aqualens
           className="w-72 rounded-2xl shadow-2xl bg-black/80 z-11"
-          powerSave={powerSave}
+          mode={mode}
           opaqueOverlap={opaqueOverlap}
           refraction={PANEL_REFRACTION}
           glare={PANEL_GLARE}
@@ -331,10 +384,11 @@ export function GlassControls({
 
             <div className="px-4 pb-4">
               <div className="flex flex-col gap-2 pb-2 border-b border-white/6 mb-1">
-                <GlassSwitch
-                  label="Power Save"
-                  value={powerSave}
-                  onChange={onPowerSaveChange}
+                <Select
+                  label="Render Mode"
+                  value={mode}
+                  options={RENDER_MODE_OPTIONS}
+                  onChange={onModeChange}
                 />
                 <GlassSwitch
                   label="Merge Lenses"
@@ -498,6 +552,25 @@ export function GlassControls({
                   max={1}
                   step={0.01}
                   onChange={(v) => onChange({ ...settings, tintAlpha: v })}
+                />
+              </Section>
+
+              <Section title="SVG Surface">
+                <Select
+                  label="Profile"
+                  value={settings.surfaceShape}
+                  options={SURFACE_SHAPE_OPTIONS}
+                  onChange={(v) => onChange({ ...settings, surfaceShape: v })}
+                />
+                <Slider
+                  label="Refractive Index"
+                  value={settings.refractiveIndex}
+                  min={1}
+                  max={2.5}
+                  step={0.01}
+                  onChange={(v) =>
+                    onChange({ ...settings, refractiveIndex: v })
+                  }
                 />
               </Section>
             </div>

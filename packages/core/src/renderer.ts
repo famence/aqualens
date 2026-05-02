@@ -8,12 +8,13 @@ import {
   REVEAL_MASKED_FRAGMENT,
 } from "./shaders";
 import { debounce } from "./utils";
-import type {
-  AqualensConfig,
-  AqualensRendererInstance,
-  SnapshotSourceElement,
-  SnapshotSourceTexture,
-  SnapshotSourceTextureSize,
+import {
+  hostStackingZIndex,
+  type AqualensConfig,
+  type AqualensRendererInstance,
+  type SnapshotSourceElement,
+  type SnapshotSourceTexture,
+  type SnapshotSourceTextureSize,
 } from "./types";
 import { AqualensLens } from "./lens";
 import {
@@ -1226,10 +1227,10 @@ export class AqualensRenderer implements AqualensRendererInstance {
       let css = HOST_BASE_CSS;
       if (stackingIndex !== undefined) {
         // Keep host one layer below lens DOM at the same stackingIndex.
-        // Lens element itself is synced to `stackingIndex * 2 + 1` in
-        // `AqualensLens._syncStackingZIndex`, while host sits at
-        // `stackingIndex * 2`.
-        css += `z-index:${stackingIndex * 2};`;
+        // Lens element itself is synced to `lensStackingZIndex(stackingIndex)`
+        // in `AqualensLens._syncStackingZIndex`, while host sits at
+        // `hostStackingZIndex(stackingIndex)`.
+        css += `z-index:${hostStackingZIndex(stackingIndex)};`;
       }
       host.style.cssText = css;
       // Insert at the start of the stacking-context root so host comes before
